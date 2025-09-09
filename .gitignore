@@ -1,0 +1,23 @@
+# Data and Models
+data/
+models/
+submissions/
+
+# Python cache & logs
+__pycache__/
+*.pyc
+*.log
+
+# Environment
+.env
+venv/
+.venv/
+env/
+
+# IDE and OS files
+.idea/
+.vscode/
+.DS_Store
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
