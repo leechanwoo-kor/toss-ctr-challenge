@@ -18,6 +18,9 @@ env/
 .idea/
 .vscode/
 .DS_Store
+.claude/
 
 # Jupyter Notebook checkpoints
 .ipynb_checkpoints/
+**/wandb/
+/notebooks/
