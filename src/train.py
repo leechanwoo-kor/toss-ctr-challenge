@@ -65,30 +65,47 @@ def main():
     pos_ratio = y.mean()
     scale_pos_weight = (1 - pos_ratio) / pos_ratio
     
+    # 기본 XGBoost 파라미터
     xgb_params = {
         'objective': 'binary:logistic',
         'tree_method': 'gpu_hist',
+        'device': 'cuda',
+        'verbosity': 0,
+        'seed': RANDOM_STATE,
+        'eval_metric': 'logloss',
+        'scale_pos_weight': scale_pos_weight,
+        # 베이스라인 파라미터
         'max_depth': 8,
         'learning_rate': 0.1,
         'subsample': 0.8,
         'colsample_bytree': 0.8,
-        'scale_pos_weight': scale_pos_weight,
-        'device': 'cuda',
-        'verbosity': 0,
-        'seed': RANDOM_STATE,
-        'eval_metric': 'logloss'
     }
-    print(f"\n📊 Class imbalance handled with scale_pos_weight: {scale_pos_weight:.2f}")
+
+    # 최적화된 하이퍼파라미터 로드 및 업데이트
+    best_params_path = MODEL_DIR / 'best_hyperparameters.json'
+    run_tags = ["xgboost"]
+    if best_params_path.exists():
+        print(f"\n튜닝된 최적 파라미터를 {best_params_path} 에서 불러옵니다.")
+        with open(best_params_path, 'r') as f:
+            best_params = json.load(f)
+        xgb_params.update(best_params)
+        print("XGBoost 파라미터를 튜닝된 값으로 업데이트했습니다.")
+        run_tags.append("tuned")
+    else:
+        print("\n최적 파라미터 파일이 없습니다. 기본 파라미터로 학습을 진행합니다.")
+        run_tags.append("baseline")
+
+    print(f"\n📊 Final XGBoost Parameters: {json.dumps(xgb_params, indent=2)}")
 
     timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M')
-    run_name = f"baseline_{timestamp}"
+    run_name = f"{'-'.join(run_tags)}_{timestamp}"
 
     run = wandb.init(
         project="toss-ctr-challenge",
         name=run_name,
         config=xgb_params,
         job_type="train",
-        tags=["xgboost", "baseline"]
+        tags=run_tags
     )
     wandb.config.update({"n_folds": N_FOLDS})
 
@@ -153,7 +170,7 @@ def main():
         
         print(f"\n💾 Saving best model (Fold {best_fold_idx + 1}, Score: {best_score:.6f})")
         
-        model_path = MODEL_DIR / 'xgboost_best.json'
+        model_path = MODEL_DIR / f'{run_name}_best_model.json'
         best_model.save_model(str(model_path))
         print(f"Model saved to: {model_path}")
         
@@ -164,12 +181,12 @@ def main():
             'best_fold': int(best_fold_idx + 1),
             'xgb_params': {k: v for k, v in xgb_params.items() if k != 'device'}
         }
-        results_path = MODEL_DIR / 'training_results.json'
+        results_path = MODEL_DIR / f'{run_name}_results.json'
         with open(results_path, 'w') as f:
             json.dump(results, f, indent=2)
         print(f"Results saved to: {results_path}")
 
-        artifact = wandb.Artifact('xgboost-model', type='model')
+        artifact = wandb.Artifact(run_name, type='model')
         artifact.add_file(str(model_path))
         run.log_artifact(artifact)
 
