@@ -3,17 +3,21 @@ import numpy as np
 from pathlib import Path
 from itertools import combinations
 import gc
+import pickle
+import json
 
 # --- 설정 ---
 SCRIPT_DIR = Path(__file__).parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 DATA_DIR = PROJECT_ROOT / 'data'
 PROCESSED_DIR = DATA_DIR / 'processed'
+MODEL_DIR = PROJECT_ROOT / 'models'
 
 INPUT_X = PROCESSED_DIR / 'X_processed.parquet'
 INPUT_Y = PROCESSED_DIR / 'y_processed.npy'
 OUTPUT_X = PROCESSED_DIR / 'X_engineered.parquet'
 OUTPUT_Y = PROCESSED_DIR / 'y_engineered.npy'
+FEATURE_STATS_PATH = MODEL_DIR / 'feature_statistics.pkl'
 
 def create_interaction_features(df, categorical_cols, continuous_cols, max_interactions=20):
     """피처 교차항 생성"""
@@ -83,12 +87,14 @@ def create_interaction_features(df, categorical_cols, continuous_cols, max_inter
     
     return df
 
-def create_statistical_features(df, categorical_cols, target=None):
+def create_statistical_features(df, categorical_cols, target=None, save_stats=False):
     """통계 기반 피처 생성"""
     print(f"Creating statistical features...")
     
     if target is None:
-        return df
+        return df, {}
+    
+    feature_stats = {}
     
     # 각 범주별 클릭율 (타겟 인코딩)
     for col in categorical_cols[:5]:  # 상위 5개만
@@ -109,8 +115,15 @@ def create_statistical_features(df, categorical_cols, target=None):
         feature_name = f'{col}_click_rate'
         df[feature_name] = df[col].map(category_stats['smoothed_mean']).fillna(global_mean)
         print(f"  Created {feature_name}")
+        
+        # 통계값 저장
+        if save_stats:
+            feature_stats[feature_name] = {
+                'global_mean': float(global_mean),
+                'category_stats': category_stats['smoothed_mean'].to_dict()
+            }
     
-    return df
+    return df, feature_stats
 
 def create_time_features(df):
     """시간 기반 파생 피처"""
@@ -157,7 +170,7 @@ def main():
     gc.collect()
     
     # 2. 통계 피처 생성 (타겟 정보 사용)
-    X_df = create_statistical_features(X_df, CATEGORICAL_FEATURES, y)
+    X_df, feature_stats = create_statistical_features(X_df, CATEGORICAL_FEATURES, y, save_stats=True)
     gc.collect()
     
     # 3. 시간 기반 피처 생성
@@ -171,6 +184,12 @@ def main():
     print("Saving engineered features...")
     X_df.to_parquet(OUTPUT_X, index=False)
     np.save(OUTPUT_Y, y)  # 타겟은 그대로
+    
+    # 통계값 저장
+    MODEL_DIR.mkdir(exist_ok=True)
+    with open(FEATURE_STATS_PATH, 'wb') as f:
+        pickle.dump(feature_stats, f)
+    print(f"Feature statistics saved to: {FEATURE_STATS_PATH}")
     
     print(f"Saved to: {OUTPUT_X}")
     print("Feature engineering completed!")

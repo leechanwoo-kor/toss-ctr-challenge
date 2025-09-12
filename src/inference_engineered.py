@@ -18,6 +18,7 @@ SUBMISSIONS_DIR = PROJECT_ROOT / 'submissions'
 
 TEST_PATH = DATA_DIR / 'test.parquet'
 ENCODERS_PATH = MODEL_DIR / 'label_encoders.pkl'
+FEATURE_STATS_PATH = MODEL_DIR / 'feature_statistics.pkl'
 
 # --- 피처 엔지니어링 함수들 (훈련과 동일) ---
 def create_interaction_features(df, categorical_cols, continuous_cols):
@@ -84,19 +85,26 @@ def create_interaction_features(df, categorical_cols, continuous_cols):
     
     return df
 
-def create_statistical_features(df, categorical_cols, global_click_rate=0.019075):
-    """통계 기반 피처 생성 (테스트 데이터용)"""
+def create_statistical_features(df, categorical_cols, feature_stats):
+    """통계 기반 피처 생성 (테스트 데이터용 - 훈련 시 통계 사용)"""
     print("  Creating statistical features...")
     
-    # 각 범주별 클릭율 (전체 평균으로 대체)
+    # 각 범주별 클릭율 (훈련 시 저장된 통계 사용)
     for col in categorical_cols[:5]:  # 상위 5개만
         if col not in df.columns:
             continue
             
-        # 피처명
         feature_name = f'{col}_click_rate'
-        # 전체 평균 클릭율로 초기화 (실제로는 훈련 데이터의 통계를 사용해야 함)
-        df[feature_name] = global_click_rate
+        if feature_name in feature_stats:
+            stats = feature_stats[feature_name]
+            global_mean = stats['global_mean']
+            category_stats = stats['category_stats']
+            
+            # 훈련 시 통계를 사용하여 매핑
+            df[feature_name] = df[col].map(category_stats).fillna(global_mean)
+            print(f"    Applied saved statistics for {feature_name}")
+        else:
+            print(f"    Warning: No statistics found for {feature_name}")
     
     return df
 
@@ -119,7 +127,7 @@ def create_time_features(df):
     
     return df
 
-def preprocess_test_data(X_test, label_encoders):
+def preprocess_test_data(X_test, label_encoders, feature_stats):
     """테스트 데이터에 학습 시와 동일한 전처리를 적용"""
     print("\nPreprocessing test data with feature engineering...")
     
@@ -154,8 +162,8 @@ def preprocess_test_data(X_test, label_encoders):
     X_test = create_interaction_features(X_test, CATEGORICAL_FEATURES, CONTINUOUS_FEATURES)
     gc.collect()
     
-    # 통계 기반 피처 생성 (타겟 인코딩)
-    X_test = create_statistical_features(X_test, CATEGORICAL_FEATURES)
+    # 통계 기반 피처 생성 (타겟 인코딩 - 훈련 시 통계 사용)
+    X_test = create_statistical_features(X_test, CATEGORICAL_FEATURES, feature_stats)
     gc.collect()
     
     # 시간 기반 피처 생성
@@ -200,6 +208,11 @@ def main():
     with open(ENCODERS_PATH, 'rb') as f:
         label_encoders = pickle.load(f)
     print("  Label encoders loaded.")
+    
+    # 피처 통계값 로드
+    with open(FEATURE_STATS_PATH, 'rb') as f:
+        feature_stats = pickle.load(f)
+    print("  Feature statistics loaded.")
 
     # 3. 테스트 데이터 로드
     print(f"\nLoading test data from {TEST_PATH}...")
@@ -212,7 +225,7 @@ def main():
     print(f"Test data shape: {X_test.shape}")
 
     # 4. 전처리 (피처 엔지니어링 포함)
-    X_test_processed = preprocess_test_data(X_test, label_encoders)
+    X_test_processed = preprocess_test_data(X_test, label_encoders, feature_stats)
 
     # 5. 예측
     print("\nMaking predictions...")
