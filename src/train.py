@@ -13,6 +13,11 @@ import xgboost as xgb
 from sklearn.metrics import average_precision_score
 from sklearn.model_selection import StratifiedKFold
 
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+from utils import print_memory, clear_memory, calculate_competition_score
+
 # --- 설정 ---
 SCRIPT_DIR = Path(__file__).parent
 PROJECT_ROOT = SCRIPT_DIR.parent
@@ -25,28 +30,36 @@ INPUT_Y = PROCESSED_DIR / 'y_processed.npy'
 N_FOLDS = 5
 RANDOM_STATE = 42
 
-# --- 유틸리티 함수 ---
-def print_memory(context=""):
-    mem = psutil.virtual_memory()
-    print(f"💾 {context} Memory: {mem.used/1024**3:.1f}GB/{mem.total/1024**3:.1f}GB ({mem.percent:.1f}%)")
+# --- 피처 중요도 분석 함수 ---
+def log_feature_importance(model, run_name):
+    print("\n📊 Analyzing and logging feature importance...")
+    importance_gain = model.get_score(importance_type='gain')
+    importance_df = pd.DataFrame({
+        'feature': list(importance_gain.keys()),
+        'importance': list(importance_gain.values())
+    }).sort_values('importance', ascending=False)
 
-def clear_memory():
-    gc.collect()
-    print("🧹 Memory cleared")
+    # 1. CSV 파일로 저장
+    csv_path = MODEL_DIR / f'{run_name}_feature_importance.csv'
+    importance_df.to_csv(csv_path, index=False)
+    print(f"Feature importance saved to: {csv_path}")
 
-def calculate_weighted_logloss(y_true, y_pred, eps=1e-15):
-    y_pred = np.clip(y_pred, eps, 1 - eps)
-    mask_0 = (y_true == 0)
-    mask_1 = (y_true == 1)
-    ll_0 = -np.mean(np.log(1 - y_pred[mask_0])) if mask_0.sum() > 0 else 0
-    ll_1 = -np.mean(np.log(y_pred[mask_1])) if mask_1.sum() > 0 else 0
-    return 0.5 * ll_0 + 0.5 * ll_1
+    # 2. Wandb 테이블로 로깅
+    wandb.log({"feature_importance_table": wandb.Table(dataframe=importance_df)})
 
-def calculate_competition_score(y_true, y_pred):
-    ap = average_precision_score(y_true, y_pred)
-    wll = calculate_weighted_logloss(y_true, y_pred)
-    score = 0.5 * ap + 0.5 * (1 / (1 + wll))
-    return score, ap, wll
+    # 3. 그래프로 시각화 및 저장/로깅
+    plt.figure(figsize=(12, 8))
+    sns.barplot(x='importance', y='feature', data=importance_df.head(25), palette='viridis')
+    plt.title('Top 25 Feature Importance (Gain)')
+    plt.tight_layout()
+    
+    plot_path = MODEL_DIR / f'{run_name}_feature_importance.png'
+    plt.savefig(plot_path)
+    print(f"Feature importance plot saved to: {plot_path}")
+    wandb.log({"feature_importance_plot": wandb.Image(str(plot_path))})
+    plt.close()
+    
+    return csv_path, plot_path # 저장된 경로 반환
 
 # --- 메인 학습 로직 ---
 def main():
@@ -81,24 +94,26 @@ def main():
         'colsample_bytree': 0.8,
     }
 
-    # 최적화된 하이퍼파라미터 로드 및 업데이트
+    # 튜닝된 하이퍼파라미터 로드
     best_params_path = MODEL_DIR / 'best_hyperparameters.json'
-    run_tags = ["xgboost"]
+    run_tags = ["xgboost", "basic_features"]
     if best_params_path.exists():
         print(f"\n튜닝된 최적 파라미터를 {best_params_path} 에서 불러옵니다.")
         with open(best_params_path, 'r') as f:
             best_params = json.load(f)
+        n_estimators = best_params.pop('n_estimators', 1000) # 튜닝시 n_estimator가 없으면 1000으로 설정
         xgb_params.update(best_params)
         print("XGBoost 파라미터를 튜닝된 값으로 업데이트했습니다.")
         run_tags.append("tuned")
     else:
         print("\n최적 파라미터 파일이 없습니다. 기본 파라미터로 학습을 진행합니다.")
+        n_estimators = 100
         run_tags.append("baseline")
 
     print(f"\n📊 Final XGBoost Parameters: {json.dumps(xgb_params, indent=2)}")
 
     timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M')
-    run_name = f"{'-'.join(run_tags)}_{timestamp}"
+    run_name = f"{''.join(run_tags)}_{timestamp}"
 
     run = wandb.init(
         project="toss-ctr-challenge",
@@ -107,7 +122,11 @@ def main():
         job_type="train",
         tags=run_tags
     )
-    wandb.config.update({"n_folds": N_FOLDS})
+    wandb.config.update({
+        "n_folds": N_FOLDS,
+        "n_estimators": n_estimators,
+        "features_type": "basic"
+    })
 
     try:
         print("\n🔄 Starting 5-Fold Cross-Validation...")
@@ -126,9 +145,9 @@ def main():
             dval = xgb.DMatrix(X_val, label=y_val)
             
             model = xgb.train(
-                xgb_params, 
+                xgb_params,
                 dtrain,
-                num_boost_round=200,
+                num_boost_round=n_estimators,
                 evals=[(dval, 'val')],
                 early_stopping_rounds=20,
                 verbose_eval=False
@@ -174,6 +193,9 @@ def main():
         best_model.save_model(str(model_path))
         print(f"Model saved to: {model_path}")
         
+        # --- 피처 중요도 분석 로깅 ---
+        csv_path, plot_path = log_feature_importance(best_model, run_name)
+
         results = {
             'cv_score_mean': float(mean_score),
             'cv_score_std': float(std_score),
@@ -188,6 +210,8 @@ def main():
 
         artifact = wandb.Artifact(run_name, type='model')
         artifact.add_file(str(model_path))
+        artifact.add_file(str(csv_path))
+        artifact.add_file(str(plot_path))
         run.log_artifact(artifact)
 
     finally:
