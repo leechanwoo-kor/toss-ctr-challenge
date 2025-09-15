@@ -17,26 +17,19 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 from utils import print_memory, clear_memory, calculate_competition_score
+from config import (
+    MODEL_TYPE, FEATURE_VERSION, RANDOM_STATE, N_FOLDS,
+    OUTPUT_X, OUTPUT_Y, BEST_PARAMS_PATH, DEFAULT_N_ESTIMATORS,
+    EARLY_STOPPING_ROUNDS, get_base_xgb_params, get_model_paths,
+    create_directories
+)
 
-# --- 설정 ---
-SCRIPT_DIR = Path(__file__).parent
-PROJECT_ROOT = SCRIPT_DIR.parent
-PROCESSED_DIR = PROJECT_ROOT / 'data' / 'processed'
-MODEL_DIR = PROJECT_ROOT / 'models'
-
-INPUT_X = PROCESSED_DIR / 'X_processed.parquet'
-INPUT_Y = PROCESSED_DIR / 'y_processed.npy'
-
-# 명명 규칙을 위한 설정
-MODEL_TYPE = "xgb"
-FEATURE_VERSION = "v2"
+# 훈련 전용 설정
 RUN_TYPE = "train"
 
-N_FOLDS = 5
-RANDOM_STATE = 42
-
 # --- 피처 중요도 분석 함수 ---
-def log_feature_importance(model, run_name):
+def log_feature_importance(model, paths):
+    """피처 중요도 분석 및 저장 (구조화된 경로 사용)"""
     print("\nAnalyzing and logging feature importance...")
     importance_gain = model.get_score(importance_type='gain')
     importance_df = pd.DataFrame({
@@ -44,70 +37,65 @@ def log_feature_importance(model, run_name):
         'importance': list(importance_gain.values())
     }).sort_values('importance', ascending=False)
 
-    csv_path = MODEL_DIR / f'{run_name}_feature_importance.csv'
+    # 구조화된 경로 사용
+    csv_path = paths['feature_importance_csv']
     importance_df.to_csv(csv_path, index=False)
     print(f"Feature importance saved to: {csv_path}")
     wandb.log({"feature_importance_table": wandb.Table(dataframe=importance_df)})
 
     plt.figure(figsize=(12, 8))
-    # FutureWarning 해결: `y`를 `hue`로 전달하고 legend=False 설정
-    sns.barplot(x='importance', y='feature', data=importance_df.head(25), palette='viridis', hue='feature', legend=False)
+    sns.barplot(x='importance', y='feature', data=importance_df.head(25),
+                palette='viridis', hue='feature', legend=False)
     plt.title('Top 25 Feature Importance (Gain)')
     plt.tight_layout()
-    
-    plot_path = MODEL_DIR / f'{run_name}_feature_importance.png'
+
+    plot_path = paths['feature_importance_png']
     plt.savefig(plot_path)
     print(f"Feature importance plot saved to: {plot_path}")
     wandb.log({"feature_importance_plot": wandb.Image(str(plot_path))})
     plt.close()
-    
+
     return csv_path, plot_path
 
 # --- 메인 학습 로직 ---
 def main():
     start_time = time.time()
     print("Starting training pipeline...")
-    MODEL_DIR.mkdir(exist_ok=True)
+
+    # 구조화된 디렉토리 생성
+    create_directories()
     print_memory("Initial")
 
     print("\nLoading preprocessed data...")
-    X_df = pd.read_parquet(INPUT_X)
-    y = np.load(INPUT_Y)
+    X_df = pd.read_parquet(OUTPUT_X)
+    y = np.load(OUTPUT_Y)
     print(f"Loaded features shape: {X_df.shape}")
     print(f"Loaded target shape: {y.shape}")
     print_memory("After loading data")
 
     pos_ratio = y.mean()
-    scale_pos_weight = (1 - pos_ratio) / pos_ratio
-    
-    xgb_params = {
-        'objective': 'binary:logistic',
-        'tree_method': 'gpu_hist',
-        'device': 'cuda',
-        'verbosity': 0,
-        'seed': RANDOM_STATE,
-        'eval_metric': 'logloss',
-        'scale_pos_weight': scale_pos_weight,
-        'max_depth': 8,
-        'learning_rate': 0.1,
-        'subsample': 0.8,
-        'colsample_bytree': 0.8,
-    }
 
-    best_params_path = MODEL_DIR / 'best_hyperparameters.json'
-    if best_params_path.exists():
-        print(f"\nLoading tuned hyperparameters from {best_params_path}...")
-        with open(best_params_path, 'r') as f:
+    # config에서 기본 파라미터 가져오기
+    xgb_params = get_base_xgb_params(pos_ratio)
+
+    if BEST_PARAMS_PATH.exists():
+        print(f"\nLoading tuned hyperparameters from {BEST_PARAMS_PATH}...")
+        with open(BEST_PARAMS_PATH, 'r') as f:
             best_params = json.load(f)
-        n_estimators = best_params.pop('n_estimators', 100)
+
+        n_estimators = best_params.pop('n_estimators', DEFAULT_N_ESTIMATORS)
         xgb_params.update(best_params)
         print("Updated XGBoost parameters with tuned values.")
     else:
         print("\nNo hyperparameter file found. Training with baseline parameters.")
-        n_estimators = 100 # 기본 n_estimators 상향
+        n_estimators = DEFAULT_N_ESTIMATORS
 
     timestamp = pd.Timestamp.now().strftime('%Y%m%d-%H%M%S')
     run_name = f"{MODEL_TYPE}-{FEATURE_VERSION}-{RUN_TYPE}-{timestamp}"
+
+    # 구조화된 경로 생성
+    paths = get_model_paths(run_name, timestamp)
+    paths['experiment_dir'].mkdir(parents=True, exist_ok=True)
 
     print(f"\nRun Name: {run_name}")
     print(f"Final XGBoost Parameters: {json.dumps(xgb_params, indent=2)}")
@@ -146,7 +134,7 @@ def main():
                 dtrain,
                 num_boost_round=n_estimators,
                 evals=[(dval, 'val')],
-                early_stopping_rounds=50,
+                early_stopping_rounds=EARLY_STOPPING_ROUNDS,
                 verbose_eval=False
             )
             
@@ -184,12 +172,13 @@ def main():
         best_model = cv_models[best_fold_idx]
         
         print(f"\nSaving best model (Fold {best_fold_idx + 1}, Score: {cv_scores[best_fold_idx]:.6f})")
-        
-        model_path = MODEL_DIR / f'{run_name}.json'
+
+        # 구조화된 경로에 모델 저장
+        model_path = paths['model']
         best_model.save_model(str(model_path))
         print(f"Model saved to: {model_path}")
-        
-        csv_path, plot_path = log_feature_importance(best_model, run_name)
+
+        csv_path, plot_path = log_feature_importance(best_model, paths)
 
         results = {
             'cv_score_mean': float(mean_score),
@@ -198,15 +187,23 @@ def main():
             'best_fold': int(best_fold_idx + 1),
             'xgb_params': {k: v for k, v in xgb_params.items() if k != 'device'}
         }
-        results_path = MODEL_DIR / f'{run_name}_results.json'
+        results_path = paths['results']
         with open(results_path, 'w') as f:
             json.dump(results, f, indent=2)
         print(f"Results saved to: {results_path}")
 
+        # 실험 요약 출력
+        print(f"\n📁 Experiment saved in: {paths['experiment_dir']}")
+        print(f"   - Model: {model_path.name}")
+        print(f"   - Results: {results_path.name}")
+        print(f"   - Feature importance: {csv_path.name}, {plot_path.name}")
+
+        # WandB artifact에 전체 실험 폴더 추가
         artifact = wandb.Artifact(run_name, type='model')
         artifact.add_file(str(model_path))
         artifact.add_file(str(csv_path))
         artifact.add_file(str(plot_path))
+        artifact.add_file(str(results_path))
         run.log_artifact(artifact)
 
     finally:

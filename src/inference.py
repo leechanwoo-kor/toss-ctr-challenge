@@ -15,19 +15,15 @@ from data_processing import (
     create_inventory_features,
     create_user_segment_features
 )
+from config import (
+    TEST_PATH, ENCODERS_PATH, SUBMISSIONS_DIR,
+    MODEL_EXPERIMENTS_DIR, MODEL_PRODUCTION_DIR,
+    CATEGORICAL_FEATURES
+)
 
-# --- 설정 ---
-SCRIPT_DIR = Path(__file__).parent
-PROJECT_ROOT = SCRIPT_DIR.parent
-DATA_DIR = PROJECT_ROOT / 'data'
-MODEL_DIR = PROJECT_ROOT / 'models'
-SUBMISSIONS_DIR = PROJECT_ROOT / 'submissions'
+# 추론 전용 설정
 
-TEST_PATH = DATA_DIR / 'test.parquet'
-ENCODERS_PATH = MODEL_DIR / 'label_encoders.pkl'
-
-# Categorical features list (same as in data_processing.py)
-CATEGORICAL_FEATURES = ['gender', 'age_group', 'inventory_id', 'day_of_week', 'hour']
+# CATEGORICAL_FEATURES는 config에서 가져옴
 
 def process_categorical_features_inference(df, label_encoders):
     """Test 데이터용 범주형 피처 처리"""
@@ -53,28 +49,51 @@ def process_categorical_features_inference(df, label_encoders):
     return df
 
 # --- 메인 추론 로직 ---
+def find_best_model():
+    """구조화된 저장소에서 최고 성능 모델 찾기"""
+    print("Searching for best model in structured storage...")
+
+    # 1. Production 모델 우선 찾기
+    production_models = list(MODEL_PRODUCTION_DIR.glob('**/*.json'))
+    if production_models:
+        model_path = max(production_models, key=lambda p: p.stat().st_mtime)
+        print(f"Found production model: {model_path}")
+        return model_path
+
+    # 2. Experiments 폴더에서 최신 모델 찾기
+    experiment_dirs = [d for d in MODEL_EXPERIMENTS_DIR.iterdir() if d.is_dir()]
+    if not experiment_dirs:
+        raise FileNotFoundError(f"No experiment directories found in {MODEL_EXPERIMENTS_DIR}")
+
+    # 최신 실험 디렉토리 찾기
+    latest_exp_dir = max(experiment_dirs, key=lambda d: d.stat().st_mtime)
+
+    # 실험 디렉토리에서 모델 파일 찾기
+    model_files = list(latest_exp_dir.glob('*.json'))
+    model_files = [f for f in model_files if not f.name.endswith('results.json')]
+
+    if not model_files:
+        raise FileNotFoundError(f"No model file found in {latest_exp_dir}")
+
+    model_path = model_files[0]  # 실험 디렉토리에는 하나의 모델만 있음
+    print(f"Found experiment model: {model_path}")
+    return model_path
+
+def get_model_results(model_path):
+    """모델에 대응하는 결과 파일 찾기"""
+    # 모델과 같은 디렉토리에서 results.json 찾기
+    results_path = model_path.parent / 'results.json'
+    return results_path if results_path.exists() else None
+
 def main():
     """메인 추론 파이프라인"""
     start_time = time.time()
     print("Starting inference pipeline...")
     SUBMISSIONS_DIR.mkdir(exist_ok=True)
 
-    # 1. 최신 모델 파일 찾기 (새로운 명명 규칙 적용)
-    # 우선순위: 튜닝된 모델 > 베이스라인 모델
-    model_files = list(MODEL_DIR.glob('xgb-v*-tuned-*.json'))
-    if not model_files:
-        model_files = list(MODEL_DIR.glob('xgb-v*-baseline-*.json'))
-    if not model_files:
-        model_files = list(MODEL_DIR.glob('*.json')) # Fallback
-
-    if not model_files:
-        raise FileNotFoundError(f"No model file found in {MODEL_DIR}")
-    
-    model_path = max(model_files, key=lambda p: p.stat().st_mtime)
-    print(f"Using model: {model_path.name}")
-    
-    # 해당 모델의 결과 파일 찾기
-    results_path = model_path.with_name(model_path.name.replace('.json', '_results.json'))
+    # 1. 구조화된 저장소에서 최고 모델 찾기
+    model_path = find_best_model()
+    results_path = get_model_results(model_path)
     
     # 2. 모델 및 인코더 로드
     print("\nLoading model and encoders...")
@@ -134,17 +153,22 @@ def main():
     print("\nCreating submission file...")
     submission_df = pd.DataFrame({'ID': test_ids, 'clicked': predictions})
 
-    try:
-        with open(results_path, 'r') as f:
-            cv_score = json.load(f)['cv_score_mean']
-        print(f"CV Score from results: {cv_score:.6f}")
-    except (FileNotFoundError, KeyError):
+    # 5. CV 점수 로드
+    if results_path and results_path.exists():
+        try:
+            with open(results_path, 'r') as f:
+                cv_score = json.load(f)['cv_score_mean']
+            print(f"CV Score from results: {cv_score:.6f}")
+        except (FileNotFoundError, KeyError):
+            cv_score = 0.0
+            print("Could not find CV score, setting to 0.0")
+    else:
         cv_score = 0.0
-        print("Could not find CV score, setting to 0.0")
+        print("No results file found, setting CV score to 0.0")
 
-    # 새로운 제출 파일명 규칙
-    model_name_stem = model_path.stem
-    filename = f'submission-{model_name_stem}-cv{cv_score:.4f}.csv'
+    # 제출 파일명 생성 (실험 디렉토리 이름 포함)
+    experiment_name = model_path.parent.name
+    filename = f'submission-{experiment_name}-cv{cv_score:.4f}.csv'
     submission_path = SUBMISSIONS_DIR / filename
 
     submission_df.to_csv(submission_path, index=False)

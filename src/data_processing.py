@@ -167,23 +167,17 @@ def create_temporal_features(df):
     hour_numeric = pd.to_numeric(df['hour'], errors='coerce')
     dow_numeric = pd.to_numeric(df['day_of_week'], errors='coerce')
 
-    # 모든 새 피처를 dict에 먼저 생성 (fragmentation 방지)
-    new_features = {
-        'is_dawn_peak': hour_numeric.isin([1, 2, 3, 4]).astype('uint8'),
-        'is_tuesday': (dow_numeric == 2).astype('uint8'),
-        'is_peak_combination': ((hour_numeric == 4) & (dow_numeric == 2)).astype('uint8'),
-        'hour_dow_interaction': (hour_numeric * 10 + dow_numeric).astype('int16'),
-        'is_profile_missing': df['gender'].isnull().astype('uint8')
-    }
-
-    # 한 번에 모든 피처 추가 (fragmentation 방지)
-    new_df = pd.DataFrame(new_features, index=df.index)
-    df = pd.concat([df, new_df], axis=1)
+    # 메모리 효율적인 개별 피처 추가
+    df['is_dawn_peak'] = hour_numeric.isin([1, 2, 3, 4]).astype('uint8')
+    df['is_tuesday'] = (dow_numeric == 2).astype('uint8')
+    df['is_peak_combination'] = ((hour_numeric == 4) & (dow_numeric == 2)).astype('uint8')
+    df['hour_dow_interaction'] = (hour_numeric * 10 + dow_numeric).astype('int16')
+    df['is_profile_missing'] = df['gender'].isnull().astype('uint8')
 
     logger.info(f"Temporal features created:")
-    logger.info(f"  Peak combination (4AM Tuesday): {new_features['is_peak_combination'].sum():,} samples")
-    logger.info(f"  Dawn peak hours (1-4AM): {new_features['is_dawn_peak'].sum():,} samples")
-    logger.info(f"  Tuesday samples: {new_features['is_tuesday'].sum():,} samples")
+    logger.info(f"  Peak combination (4AM Tuesday): {df['is_peak_combination'].sum():,} samples")
+    logger.info(f"  Dawn peak hours (1-4AM): {df['is_dawn_peak'].sum():,} samples")
+    logger.info(f"  Tuesday samples: {df['is_tuesday'].sum():,} samples")
 
     return df
 
@@ -222,9 +216,9 @@ def create_user_segment_features(df):
         high_value_mask |= mask
     new_features['is_high_value_segment'] = high_value_mask.astype('uint8')
 
-    # 한 번에 모든 피처 추가 (fragmentation 방지)
-    new_df = pd.DataFrame(new_features, index=df.index)
-    df = pd.concat([df, new_df], axis=1)
+    # 메모리 효율적인 개별 피처 추가
+    for col_name, col_data in new_features.items():
+        df[col_name] = col_data
 
     # 결과 로깅
     if 'is_top_segment_1' in new_features:
@@ -246,9 +240,9 @@ def create_inventory_features(df):
         'is_low_performance_inventory': df['inventory_id'].isin(['11', '19']).astype('uint8')
     }
 
-    # 한 번에 모든 피처 추가 (fragmentation 방지)
-    new_df = pd.DataFrame(new_features, index=df.index)
-    df = pd.concat([df, new_df], axis=1)
+    # 메모리 효율적인 개별 피처 추가
+    for col_name, col_data in new_features.items():
+        df[col_name] = col_data
 
     logger.info(f"  Premium inventory: {new_features['is_premium_inventory'].sum():,} samples")
     logger.info(f"  High volume inventory: {new_features['is_high_volume_inventory'].sum():,} samples")
@@ -296,10 +290,14 @@ def process_data():
     y = train_df['clicked'].values
     X = train_df.drop('clicked', axis=1)
 
-    # seq 컬럼 제거 (메모리 절약)
+    # seq 피처 생성 (제거하기 전에)
     if 'seq' in X.columns:
+        logger.info("Creating sequence features...")
+        from seq_feature_engineering import create_sequence_features
+        X = create_sequence_features(X)
+        # 이제 원본 seq 컬럼 제거 (메모리 절약)
         X = X.drop('seq', axis=1)
-        logger.info("seq column removed for memory efficiency")
+        logger.info("Original seq column removed after feature extraction")
 
     # Phase 1: Critical 개선사항
     logger.info("\n=== Phase 1: Critical Improvements ===")

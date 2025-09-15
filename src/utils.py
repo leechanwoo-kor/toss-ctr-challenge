@@ -6,12 +6,12 @@ from sklearn.metrics import average_precision_score
 def print_memory(context=""):
     """현재 메모리 사용량을 출력하는 함수"""
     mem = psutil.virtual_memory()
-    print(f"💾 {context} Memory: {mem.used/1024**3:.1f}GB/{mem.total/1024**3:.1f}GB ({mem.percent:.1f}%)")
+    print(f"[MEM] {context} Memory: {mem.used/1024**3:.1f}GB/{mem.total/1024**3:.1f}GB ({mem.percent:.1f}%)")
 
 def clear_memory():
     """메모리를 정리하는 함수"""
     gc.collect()
-    print("🧹 Memory cleared")
+    print("[MEM] Memory cleared")
 
 def calculate_weighted_logloss(y_true, y_pred, eps=1e-15):
     """대회 평가 산식인 Weighted LogLoss를 계산하는 함수"""
