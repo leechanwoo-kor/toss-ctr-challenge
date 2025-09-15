@@ -27,29 +27,31 @@ MODEL_DIR = PROJECT_ROOT / 'models'
 INPUT_X = PROCESSED_DIR / 'X_processed.parquet'
 INPUT_Y = PROCESSED_DIR / 'y_processed.npy'
 
+# 명명 규칙을 위한 설정
+MODEL_TYPE = "xgb"
+FEATURE_VERSION = "v2"
+RUN_TYPE = "train"
+
 N_FOLDS = 5
 RANDOM_STATE = 42
 
 # --- 피처 중요도 분석 함수 ---
 def log_feature_importance(model, run_name):
-    print("\n📊 Analyzing and logging feature importance...")
+    print("\nAnalyzing and logging feature importance...")
     importance_gain = model.get_score(importance_type='gain')
     importance_df = pd.DataFrame({
         'feature': list(importance_gain.keys()),
         'importance': list(importance_gain.values())
     }).sort_values('importance', ascending=False)
 
-    # 1. CSV 파일로 저장
     csv_path = MODEL_DIR / f'{run_name}_feature_importance.csv'
     importance_df.to_csv(csv_path, index=False)
     print(f"Feature importance saved to: {csv_path}")
-
-    # 2. Wandb 테이블로 로깅
     wandb.log({"feature_importance_table": wandb.Table(dataframe=importance_df)})
 
-    # 3. 그래프로 시각화 및 저장/로깅
     plt.figure(figsize=(12, 8))
-    sns.barplot(x='importance', y='feature', data=importance_df.head(25), palette='viridis')
+    # FutureWarning 해결: `y`를 `hue`로 전달하고 legend=False 설정
+    sns.barplot(x='importance', y='feature', data=importance_df.head(25), palette='viridis', hue='feature', legend=False)
     plt.title('Top 25 Feature Importance (Gain)')
     plt.tight_layout()
     
@@ -59,16 +61,16 @@ def log_feature_importance(model, run_name):
     wandb.log({"feature_importance_plot": wandb.Image(str(plot_path))})
     plt.close()
     
-    return csv_path, plot_path # 저장된 경로 반환
+    return csv_path, plot_path
 
 # --- 메인 학습 로직 ---
 def main():
     start_time = time.time()
-    print("🚀 Starting training pipeline...")
+    print("Starting training pipeline...")
     MODEL_DIR.mkdir(exist_ok=True)
     print_memory("Initial")
 
-    print("\n📦 Loading preprocessed data...")
+    print("\nLoading preprocessed data...")
     X_df = pd.read_parquet(INPUT_X)
     y = np.load(INPUT_Y)
     print(f"Loaded features shape: {X_df.shape}")
@@ -78,7 +80,6 @@ def main():
     pos_ratio = y.mean()
     scale_pos_weight = (1 - pos_ratio) / pos_ratio
     
-    # 기본 XGBoost 파라미터
     xgb_params = {
         'objective': 'binary:logistic',
         'tree_method': 'gpu_hist',
@@ -87,49 +88,45 @@ def main():
         'seed': RANDOM_STATE,
         'eval_metric': 'logloss',
         'scale_pos_weight': scale_pos_weight,
-        # 베이스라인 파라미터
         'max_depth': 8,
         'learning_rate': 0.1,
         'subsample': 0.8,
         'colsample_bytree': 0.8,
     }
 
-    # 튜닝된 하이퍼파라미터 로드
     best_params_path = MODEL_DIR / 'best_hyperparameters.json'
-    run_tags = ["xgboost", "basic_features"]
     if best_params_path.exists():
-        print(f"\n튜닝된 최적 파라미터를 {best_params_path} 에서 불러옵니다.")
+        print(f"\nLoading tuned hyperparameters from {best_params_path}...")
         with open(best_params_path, 'r') as f:
             best_params = json.load(f)
-        n_estimators = best_params.pop('n_estimators', 1000) # 튜닝시 n_estimator가 없으면 1000으로 설정
+        n_estimators = best_params.pop('n_estimators', 2000)
         xgb_params.update(best_params)
-        print("XGBoost 파라미터를 튜닝된 값으로 업데이트했습니다.")
-        run_tags.append("tuned")
+        print("Updated XGBoost parameters with tuned values.")
     else:
-        print("\n최적 파라미터 파일이 없습니다. 기본 파라미터로 학습을 진행합니다.")
-        n_estimators = 100
-        run_tags.append("baseline")
+        print("\nNo hyperparameter file found. Training with baseline parameters.")
+        n_estimators = 2000 # 기본 n_estimators 상향
 
-    print(f"\n📊 Final XGBoost Parameters: {json.dumps(xgb_params, indent=2)}")
+    timestamp = pd.Timestamp.now().strftime('%Y%m%d-%H%M%S')
+    run_name = f"{MODEL_TYPE}-{FEATURE_VERSION}-{RUN_TYPE}-{timestamp}"
 
-    timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M')
-    run_name = f"{''.join(run_tags)}_{timestamp}"
+    print(f"\nRun Name: {run_name}")
+    print(f"Final XGBoost Parameters: {json.dumps(xgb_params, indent=2)}")
+    print(f"Max n_estimators: {n_estimators}")
 
     run = wandb.init(
         project="toss-ctr-challenge",
         name=run_name,
         config=xgb_params,
-        job_type="train",
-        tags=run_tags
+        job_type=RUN_TYPE,
+        tags=[MODEL_TYPE, FEATURE_VERSION]
     )
     wandb.config.update({
         "n_folds": N_FOLDS,
-        "n_estimators": n_estimators,
-        "features_type": "basic"
+        "max_n_estimators": n_estimators
     })
 
     try:
-        print("\n🔄 Starting 5-Fold Cross-Validation...")
+        print("\nStarting 5-Fold Cross-Validation...")
         skf = StratifiedKFold(n_splits=N_FOLDS, shuffle=True, random_state=RANDOM_STATE)
         
         cv_scores, cv_ap, cv_wll, cv_models = [], [], [], []
@@ -149,7 +146,7 @@ def main():
                 dtrain,
                 num_boost_round=n_estimators,
                 evals=[(dval, 'val')],
-                early_stopping_rounds=20,
+                early_stopping_rounds=50,
                 verbose_eval=False
             )
             
@@ -175,25 +172,23 @@ def main():
             del dtrain, dval, X_train, X_val, y_train, y_val
             clear_memory()
 
-        print("\n🏁 Cross-Validation Finished!")
+        print("\nCross-Validation Finished!")
         mean_score = np.mean(cv_scores)
         std_score = np.std(cv_scores)
-        print(f"🏆 Final CV Score: {mean_score:.6f} ± {std_score:.6f}")
+        print(f"Final CV Score: {mean_score:.6f} +-{std_score:.6f}")
 
         wandb.summary["cv_score_mean"] = mean_score
         wandb.summary["cv_score_std"] = std_score
 
         best_fold_idx = np.argmax(cv_scores)
         best_model = cv_models[best_fold_idx]
-        best_score = cv_scores[best_fold_idx]
         
-        print(f"\n💾 Saving best model (Fold {best_fold_idx + 1}, Score: {best_score:.6f})")
+        print(f"\nSaving best model (Fold {best_fold_idx + 1}, Score: {cv_scores[best_fold_idx]:.6f})")
         
-        model_path = MODEL_DIR / f'{run_name}_best_model.json'
+        model_path = MODEL_DIR / f'{run_name}.json'
         best_model.save_model(str(model_path))
         print(f"Model saved to: {model_path}")
         
-        # --- 피처 중요도 분석 로깅 ---
         csv_path, plot_path = log_feature_importance(best_model, run_name)
 
         results = {
@@ -216,7 +211,7 @@ def main():
 
     finally:
         run.finish()
-        print(f"\n✅ Training pipeline finished in {time.time() - start_time:.1f}s")
+        print(f"\nTraining pipeline finished in {time.time() - start_time:.1f}s")
 
 if __name__ == '__main__':
     main()
