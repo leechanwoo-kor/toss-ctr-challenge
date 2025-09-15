@@ -124,27 +124,38 @@ def improved_missing_handler(df):
 
     logger.info(f"Processing {len(continuous_features)} continuous features for missing values...")
 
+    processed_count = 0
+    high_missing_count = 0
+    medium_missing_count = 0
+    low_missing_count = 0
+
     for feature in continuous_features:
         null_count = df[feature].isnull().sum()
         if null_count == 0:
             continue
 
         missing_rate = null_count / len(df)
+        processed_count += 1
 
         if missing_rate > 0.1:  # 10% 이상: 별도 피처 생성
             df[f'{feature}_is_missing'] = df[feature].isnull().astype('uint8')
             df[feature] = df[feature].fillna(-999)
-            logger.info(f"{feature}: {missing_rate:.1%} missing - separate indicator created")
+            high_missing_count += 1
 
         elif missing_rate > 0.05:  # 5-10%: 중위수
             median_val = df[feature].median()
             df[feature] = df[feature].fillna(median_val)
-            logger.info(f"{feature}: {missing_rate:.1%} missing - filled with median")
+            medium_missing_count += 1
 
         else:  # 5% 미만: 평균값
             mean_val = df[feature].mean()
             df[feature] = df[feature].fillna(mean_val)
-            logger.info(f"{feature}: {missing_rate:.1%} missing - filled with mean")
+            low_missing_count += 1
+
+    logger.info(f"Missing value processing complete:")
+    logger.info(f"  High missing (>10%): {high_missing_count} features")
+    logger.info(f"  Medium missing (5-10%): {medium_missing_count} features")
+    logger.info(f"  Low missing (<5%): {low_missing_count} features")
 
     return df
 
@@ -152,73 +163,75 @@ def create_temporal_features(df):
     """고가치 시간 피처 생성 - 보고서 핵심 발견사항"""
     logger.info("Creating high-value temporal features...")
 
-    # 모든 새 피처를 dict에 먼저 생성 (fragmentation 방지)
-    new_features = {}
-
     # 먼저 hour와 day_of_week를 숫자로 확실히 변환
     hour_numeric = pd.to_numeric(df['hour'], errors='coerce')
     dow_numeric = pd.to_numeric(df['day_of_week'], errors='coerce')
 
-    # 새벽 시간대 표시 (CTR 4-7배 향상)
-    new_features['is_dawn_peak'] = hour_numeric.isin([1, 2, 3, 4]).astype('uint8')
+    # 모든 새 피처를 dict에 먼저 생성 (fragmentation 방지)
+    new_features = {
+        'is_dawn_peak': hour_numeric.isin([1, 2, 3, 4]).astype('uint8'),
+        'is_tuesday': (dow_numeric == 2).astype('uint8'),
+        'is_peak_combination': ((hour_numeric == 4) & (dow_numeric == 2)).astype('uint8'),
+        'hour_dow_interaction': (hour_numeric * 10 + dow_numeric).astype('int16'),
+        'is_profile_missing': df['gender'].isnull().astype('uint8')
+    }
 
-    # 화요일 표시 (가장 높은 CTR)
-    new_features['is_tuesday'] = (dow_numeric == 2).astype('uint8')
-
-    # 최고 효율 조합 (6.85% CTR)
-    new_features['is_peak_combination'] = (
-        (hour_numeric == 4) & (dow_numeric == 2)
-    ).astype('uint8')
-
-    # 시간×요일 상호작용 인코딩 (확실히 숫자로)
-    new_features['hour_dow_interaction'] = (hour_numeric * 10 + dow_numeric).astype('int16')
-
-    # 프로필 정보 없음 피처 (콜드 스타트 처리)
-    new_features['is_profile_missing'] = df['gender'].isnull().astype('uint8')
-
-    # 한 번에 모든 피처 추가
-    for col_name, col_data in new_features.items():
-        df[col_name] = col_data
-
-    peak_count = new_features['is_peak_combination'].sum()
-    dawn_count = new_features['is_dawn_peak'].sum()
-    tuesday_count = new_features['is_tuesday'].sum()
+    # 한 번에 모든 피처 추가 (fragmentation 방지)
+    new_df = pd.DataFrame(new_features, index=df.index)
+    df = pd.concat([df, new_df], axis=1)
 
     logger.info(f"Temporal features created:")
-    logger.info(f"  Peak combination (4AM Tuesday): {peak_count:,} samples")
-    logger.info(f"  Dawn peak hours (1-4AM): {dawn_count:,} samples")
-    logger.info(f"  Tuesday samples: {tuesday_count:,} samples")
+    logger.info(f"  Peak combination (4AM Tuesday): {new_features['is_peak_combination'].sum():,} samples")
+    logger.info(f"  Dawn peak hours (1-4AM): {new_features['is_dawn_peak'].sum():,} samples")
+    logger.info(f"  Tuesday samples: {new_features['is_tuesday'].sum():,} samples")
 
     return df
 
 def create_user_segment_features(df):
-    """사용자 세그먼트 피처 - Phase 2 준비"""
-    logger.info("Creating user segment features...")
+    """사용자 세그먼트 피처 - 범주형 처리 후 실행"""
+    logger.info("Creating user segment features (after categorical encoding)...")
 
     new_features = {}
 
-    # 슈퍼 프리미엄 세그먼트 (10% CTR)
-    new_features['is_super_premium_segment'] = (
-        (df['gender'] == 1) & (df['age_group'] == 1)
-    ).astype('uint8')
+    # 범주형 인코딩 후 숫자 값으로 비교
+    # LabelEncoder로 변환된 값들을 확인해서 매핑
 
-    # 고가치 세그먼트들
-    high_ctr_combinations = [(2, 3), (1, 4), (2, 2), (1, 3)]
+    # 가장 빈도 높은 조합들 찾기 (인코딩된 값 기준)
+    combo_counts = df.groupby(['gender', 'age_group']).size().sort_values(ascending=False)
+    top_combos = combo_counts.head(5)
+
+    logger.info(f"  Found {len(top_combos)} high-frequency segment combinations")
+
+    # 상위 2개 조합을 타겟으로 설정
+    if len(top_combos) >= 2:
+        top_combo_1 = top_combos.index[0]
+        top_combo_2 = top_combos.index[1]
+
+        new_features['is_top_segment_1'] = (
+            (df['gender'] == top_combo_1[0]) & (df['age_group'] == top_combo_1[1])
+        ).astype('uint8')
+
+        new_features['is_top_segment_2'] = (
+            (df['gender'] == top_combo_2[0]) & (df['age_group'] == top_combo_2[1])
+        ).astype('uint8')
+
+    # 상위 5개 조합을 고가치 세그먼트로 설정
     high_value_mask = pd.Series(False, index=df.index)
-    for gender, age in high_ctr_combinations:
+    for (gender, age), count in top_combos.items():
         mask = (df['gender'] == gender) & (df['age_group'] == age)
         high_value_mask |= mask
     new_features['is_high_value_segment'] = high_value_mask.astype('uint8')
 
-    # 한 번에 모든 피처 추가
-    for col_name, col_data in new_features.items():
-        df[col_name] = col_data
+    # 한 번에 모든 피처 추가 (fragmentation 방지)
+    new_df = pd.DataFrame(new_features, index=df.index)
+    df = pd.concat([df, new_df], axis=1)
 
-    super_premium_count = new_features['is_super_premium_segment'].sum()
-    high_value_count = new_features['is_high_value_segment'].sum()
+    # 결과 로깅
+    if 'is_top_segment_1' in new_features:
+        logger.info(f"  Top segment 1: {new_features['is_top_segment_1'].sum():,} samples")
+        logger.info(f"  Top segment 2: {new_features['is_top_segment_2'].sum():,} samples")
 
-    logger.info(f"  Super premium segment: {super_premium_count:,} samples")
-    logger.info(f"  High value segments: {high_value_count:,} samples")
+    logger.info(f"  High value segments (top 5): {new_features['is_high_value_segment'].sum():,} samples")
 
     return df
 
@@ -226,25 +239,20 @@ def create_inventory_features(df):
     """인벤토리 최적화 피처"""
     logger.info("Creating inventory optimization features...")
 
-    new_features = {}
+    # 실제 존재하는 인벤토리 기반 피처
+    new_features = {
+        'is_premium_inventory': df['inventory_id'].isin(['88', '37']).astype('uint8'),
+        'is_high_volume_inventory': df['inventory_id'].isin(['2', '36', '37']).astype('uint8'),
+        'is_low_performance_inventory': df['inventory_id'].isin(['11', '19']).astype('uint8')
+    }
 
-    # 고성과 인벤토리 (집중 투자 대상)
-    high_performance = [88, 41, 37]
-    new_features['is_premium_inventory'] = df['inventory_id'].isin(high_performance).astype('uint8')
+    # 한 번에 모든 피처 추가 (fragmentation 방지)
+    new_df = pd.DataFrame(new_features, index=df.index)
+    df = pd.concat([df, new_df], axis=1)
 
-    # 저성과 인벤토리 표시 (최적화 필요)
-    low_performance = [2, 19, 11]
-    new_features['is_low_performance_inventory'] = df['inventory_id'].isin(low_performance).astype('uint8')
-
-    # 한 번에 모든 피처 추가
-    for col_name, col_data in new_features.items():
-        df[col_name] = col_data
-
-    premium_count = new_features['is_premium_inventory'].sum()
-    low_perf_count = new_features['is_low_performance_inventory'].sum()
-
-    logger.info(f"  Premium inventory samples: {premium_count:,}")
-    logger.info(f"  Low performance inventory samples: {low_perf_count:,}")
+    logger.info(f"  Premium inventory: {new_features['is_premium_inventory'].sum():,} samples")
+    logger.info(f"  High volume inventory: {new_features['is_high_volume_inventory'].sum():,} samples")
+    logger.info(f"  Low performance inventory: {new_features['is_low_performance_inventory'].sum():,} samples")
 
     return df
 
@@ -272,8 +280,7 @@ def process_categorical_features(df):
             df[feature] = le.fit_transform(df[feature].astype(str))
             label_encoders[feature] = le
 
-            logger.info(f"  {feature}: {len(significant_values)} significant values (threshold: {min_frequency})")
-
+    logger.info(f"  Processed {len(CATEGORICAL_FEATURES)} categorical features")
     return df, label_encoders
 
 def process_data():
@@ -312,14 +319,14 @@ def process_data():
     # 5. 고가치 시간 피처 생성
     X = create_temporal_features(X)
 
-    # 6. 사용자 세그먼트 피처 (Phase 2 준비)
-    X = create_user_segment_features(X)
-
-    # 7. 인벤토리 피처
+    # 6. 인벤토리 피처 (문자열 비교)
     X = create_inventory_features(X)
 
-    # 8. 범주형 피처 처리
+    # 7. 범주형 피처 처리 (먼저 숫자로 변환)
     X, label_encoders = process_categorical_features(X)
+
+    # 8. 사용자 세그먼트 피처 (숫자 변환 후)
+    X = create_user_segment_features(X)
 
     # 메모리 정리
     gc.collect()

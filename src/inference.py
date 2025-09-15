@@ -6,7 +6,15 @@ import time
 import json
 import xgboost as xgb
 
-from data_processing import preprocess
+from data_processing import (
+    optimize_memory_usage,
+    handle_feat_e_3_critical,
+    handle_outliers_systematic,
+    improved_missing_handler,
+    create_temporal_features,
+    create_inventory_features,
+    create_user_segment_features
+)
 
 # --- 설정 ---
 SCRIPT_DIR = Path(__file__).parent
@@ -17,6 +25,32 @@ SUBMISSIONS_DIR = PROJECT_ROOT / 'submissions'
 
 TEST_PATH = DATA_DIR / 'test.parquet'
 ENCODERS_PATH = MODEL_DIR / 'label_encoders.pkl'
+
+# Categorical features list (same as in data_processing.py)
+CATEGORICAL_FEATURES = ['gender', 'age_group', 'inventory_id', 'day_of_week', 'hour']
+
+def process_categorical_features_inference(df, label_encoders):
+    """Test 데이터용 범주형 피처 처리"""
+    print("    Processing categorical features with trained encoders...")
+
+    for feature in CATEGORICAL_FEATURES:
+        if feature in df.columns and feature in label_encoders:
+            encoder = label_encoders[feature]
+            known_classes = set(encoder.classes_)
+
+            # 결측치를 "missing"으로 처리
+            df[feature] = df[feature].fillna("missing")
+
+            # 학습 시 보지 못한 값들을 "rare"로 처리
+            df[feature] = df[feature].apply(
+                lambda x: x if x in known_classes else "rare"
+            )
+
+            # Label Encoding 적용
+            df[feature] = encoder.transform(df[feature].astype(str))
+
+    print(f"    Processed {len(CATEGORICAL_FEATURES)} categorical features")
+    return df
 
 # --- 메인 추론 로직 ---
 def main():
@@ -61,11 +95,38 @@ def main():
     if 'seq' in X_test.columns:
         X_test = X_test.drop('seq', axis=1)
     
-    X_test_processed, _ = preprocess(X_test, is_train=False, encoders=label_encoders)
+    # Enhanced preprocessing pipeline (same as training)
+    print("  Applying enhanced preprocessing...")
+
+    # 1. Memory optimization
+    X_test = optimize_memory_usage(X_test)
+
+    # 2. feat_e_3 critical handling
+    X_test = handle_feat_e_3_critical(X_test)
+
+    # 3. Systematic outlier handling
+    X_test = handle_outliers_systematic(X_test)
+
+    # 4. Improved missing value handling
+    X_test = improved_missing_handler(X_test)
+
+    # 5. Temporal features
+    X_test = create_temporal_features(X_test)
+
+    # 6. Inventory features
+    X_test = create_inventory_features(X_test)
+
+    # 7. Categorical features (using trained encoders)
+    X_test = process_categorical_features_inference(X_test, label_encoders)
+
+    # 8. User segment features (after categorical encoding)
+    X_test = create_user_segment_features(X_test)
+
+    print(f"  Processed test data shape: {X_test.shape}")
 
     # 4. 예측
     print("\nMaking predictions...")
-    dtest = xgb.DMatrix(X_test_processed)
+    dtest = xgb.DMatrix(X_test)
     predictions = model.predict(dtest)
     print("Predictions generated.")
 
