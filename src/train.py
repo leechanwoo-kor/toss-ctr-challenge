@@ -99,12 +99,12 @@ def main():
         print(f"\nLoading tuned hyperparameters from {best_params_path}...")
         with open(best_params_path, 'r') as f:
             best_params = json.load(f)
-        n_estimators = best_params.pop('n_estimators', 100)
+        n_estimators = best_params.pop('n_estimators', 10)
         xgb_params.update(best_params)
         print("Updated XGBoost parameters with tuned values.")
     else:
         print("\nNo hyperparameter file found. Training with baseline parameters.")
-        n_estimators = 100 # 기본 n_estimators 상향
+        n_estimators = 10 # 기본 n_estimators 상향
 
     timestamp = pd.Timestamp.now().strftime('%Y%m%d-%H%M%S')
     run_name = f"{MODEL_TYPE}-{FEATURE_VERSION}-{RUN_TYPE}-{timestamp}"
