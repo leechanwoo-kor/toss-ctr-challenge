@@ -12,7 +12,7 @@ import time
 from tqdm import tqdm
 
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import LabelEncoder, RobustScaler
 from sklearn.metrics import roc_auc_score, average_precision_score
 
 import torch
@@ -20,6 +20,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
+import wandb
+from datetime import datetime
 
 # DeepFM Configuration
 DEEPFM_CFG = {
@@ -32,6 +34,14 @@ DEEPFM_CFG = {
     'DROPOUT': 0.2,
     'SEED': 42,
     'EARLY_STOPPING': 5,
+}
+
+# WandB Configuration
+WANDB_CFG = {
+    'PROJECT': 'toss-ctr-deepfm',
+    'ENTITY': None,  # 개인 계정 사용
+    'TAGS': ['deepfm', 'improved-preprocessing', 'full-dataset'],
+    'NOTES': 'DeepFM with improved preprocessing: median imputation, outlier clipping, robust scaling'
 }
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -68,12 +78,14 @@ def calculate_competition_metrics(y_true, y_pred):
     return comp_score, ap, wll, auc
 
 class FeatureProcessor:
-    """DeepFM용 피처 전처리기"""
+    """DeepFM용 피처 전처리기 (개선된 전처리 포함)"""
     def __init__(self):
         self.categorical_encoders = {}
         self.categorical_features = []
         self.numerical_features = []
         self.feature_dims = {}
+        self.scaler = RobustScaler()  # 이상치에 강건한 스케일러
+        self.numerical_stats = {}    # 통계적 대체값 저장
 
     def fit_transform(self, df):
         """피처 전처리 및 변환"""
@@ -107,8 +119,8 @@ class FeatureProcessor:
             self.feature_dims[col] = len(le.classes_)
             print(f"  {col}: {self.feature_dims[col]} categories")
 
-        # 수치형 피처 전처리
-        df[self.numerical_features] = df[self.numerical_features].fillna(0).astype(np.float32)
+        # 수치형 피처 전처리 (개선된 방식)
+        df = self.preprocess_numerical_features(df)
 
         # 시퀀스 피처 처리 (통계적 변환)
         if 'seq' in df.columns:
@@ -181,6 +193,45 @@ class FeatureProcessor:
 
         return seq_features.astype(np.float32)
 
+    def preprocess_numerical_features(self, df):
+        """개선된 수치형 피처 전처리"""
+        print("🔧 Applying improved numerical preprocessing...")
+
+        # 1. 통계적 결측치 대체
+        for col in self.numerical_features:
+            if col in df.columns:
+                # 결측치 비율 확인
+                missing_pct = df[col].isnull().sum() / len(df) * 100
+
+                if missing_pct > 0:
+                    # 중앙값으로 대체 (0 대신)
+                    median_val = df[col].median()
+                    self.numerical_stats[col] = {'median': median_val, 'missing_pct': missing_pct}
+                    df[col] = df[col].fillna(median_val)
+
+                    if missing_pct > 5:
+                        print(f"  {col}: {missing_pct:.2f}% missing → filled with median {median_val:.4f}")
+
+                # 2. 극단 이상치 클리핑 (99th percentile)
+                q99 = df[col].quantile(0.99)
+                q01 = df[col].quantile(0.01)
+
+                outlier_mask = (df[col] > q99) | (df[col] < q01)
+                outlier_pct = outlier_mask.sum() / len(df) * 100
+
+                if outlier_pct > 1:  # 1% 이상 이상치가 있으면 클리핑
+                    df[col] = np.clip(df[col], q01, q99)
+                    print(f"  {col}: {outlier_pct:.2f}% outliers clipped [{q01:.4f}, {q99:.4f}]")
+
+        # 3. RobustScaler 적용
+        df[self.numerical_features] = self.scaler.fit_transform(df[self.numerical_features])
+        print(f"  Applied RobustScaler to {len(self.numerical_features)} numerical features")
+
+        # float32로 변환
+        df[self.numerical_features] = df[self.numerical_features].astype(np.float32)
+
+        return df
+
     def transform(self, df):
         """기존 fit된 정보로 변환"""
         # 범주형 피처 변환
@@ -198,10 +249,25 @@ class FeatureProcessor:
             seq_features = self.process_sequence_features(df['seq'])
             df = pd.concat([df, seq_features], axis=1)
 
-        # 실제 존재하는 수치형 피처만 처리
+        # 실제 존재하는 수치형 피처만 처리 (개선된 방식)
         existing_numerical = [col for col in self.numerical_features if col in df.columns]
         if existing_numerical:
-            df[existing_numerical] = df[existing_numerical].fillna(0).astype(np.float32)
+            # 훈련 시 저장된 통계 사용
+            for col in existing_numerical:
+                if col in self.numerical_stats:
+                    median_val = self.numerical_stats[col]['median']
+                    df[col] = df[col].fillna(median_val)
+                else:
+                    df[col] = df[col].fillna(df[col].median())
+
+                # 같은 클리핑 범위 적용 (필요시)
+                q99 = df[col].quantile(0.99)
+                q01 = df[col].quantile(0.01)
+                df[col] = np.clip(df[col], q01, q99)
+
+            # 스케일러 적용
+            df[existing_numerical] = self.scaler.transform(df[existing_numerical])
+            df[existing_numerical] = df[existing_numerical].astype(np.float32)
 
         return df
 
@@ -338,8 +404,20 @@ class DeepFM(nn.Module):
 def train_deepfm():
     """DeepFM 훈련"""
 
+    # WandB 초기화
+    run_name = f"deepfm-improved-{datetime.now().strftime('%m%d_%H%M')}"
+    wandb.init(
+        project=WANDB_CFG['PROJECT'],
+        entity=WANDB_CFG['ENTITY'],
+        name=run_name,
+        tags=WANDB_CFG['TAGS'],
+        notes=WANDB_CFG['NOTES'],
+        config=DEEPFM_CFG
+    )
+
     print("🎯 Starting DeepFM Training for CTR Prediction")
     print("="*60)
+    print(f"📊 WandB Run: {run_name}")
 
     # 데이터 로드 (샘플링)
     print("📊 Loading and sampling data...")
@@ -472,6 +550,19 @@ def train_deepfm():
 
         current_lr = optimizer.param_groups[0]['lr']
 
+        # WandB 로깅
+        wandb.log({
+            'epoch': epoch,
+            'train_loss': train_loss,
+            'val_loss': val_loss,
+            'comp_score': comp_score,
+            'ap': ap,
+            'wll': wll if not np.isinf(wll) else None,  # inf 값 처리
+            'auc': auc,
+            'learning_rate': current_lr,
+            'best_score': best_score
+        })
+
         print(f"{epoch:5d} | {train_loss:10.4f} | {val_loss:8.4f} | "
               f"{comp_score:10.4f} | {ap:.4f} | {wll:.4f} | {auc:.4f} | {current_lr:.2e}")
 
@@ -498,6 +589,9 @@ def train_deepfm():
     print(f"\n✅ Training completed! Best score: {best_score:.6f}")
     print(f"📁 Model saved: deepfm_best_model.pth")
     print(f"🔮 For prediction, run: python deepfm_predict.py")
+
+    # WandB 종료
+    wandb.finish()
 
     return best_score
 

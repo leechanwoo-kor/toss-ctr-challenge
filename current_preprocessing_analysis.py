@@ -109,10 +109,9 @@ def analyze_sequence_processing(df):
         print("❌ No sequence column found")
         return
 
-    # 샘플링 (메모리 절약)
-    sample_size = min(50000, len(df))
-    sample_df = df.sample(n=sample_size, random_state=42)
-    print(f"📊 Analyzing {sample_size:,} samples...")
+    # 전체 데이터 분석
+    sample_df = df
+    print(f"📊 Analyzing full dataset: {len(df):,} samples...")
 
     # 현재 방식으로 처리
     parse_success = 0

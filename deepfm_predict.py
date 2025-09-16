@@ -9,15 +9,18 @@ import torch
 import torch.nn as nn
 from tqdm import tqdm
 import pickle
+from sklearn.preprocessing import RobustScaler
 
 # 기존 클래스들 import (동일한 정의 필요)
 class FeatureProcessor:
-    """DeepFM용 피처 전처리기"""
+    """DeepFM용 피처 전처리기 (개선된 전처리 포함)"""
     def __init__(self):
         self.categorical_encoders = {}
         self.categorical_features = []
         self.numerical_features = []
         self.feature_dims = {}
+        self.scaler = RobustScaler()  # 이상치에 강건한 스케일러
+        self.numerical_stats = {}    # 통계적 대체값 저장
 
     def process_sequence_features(self, seq_series):
         """시퀀스 컬럼을 통계적 피처로 변환"""
@@ -77,6 +80,39 @@ class FeatureProcessor:
         seq_features['seq_mean_per_len'] = seq_features['seq_mean'] / (seq_features['seq_length'] + 1)
 
         return seq_features.astype(np.float32)
+
+    def preprocess_numerical_features_inference(self, df):
+        """추론용 개선된 수치형 피처 전처리"""
+        print("🔧 Applying improved numerical preprocessing for inference...")
+
+        # 1. 훈련 시 저장된 통계로 결측치 대체
+        for col in self.numerical_features:
+            if col in df.columns:
+                if col in self.numerical_stats:
+                    median_val = self.numerical_stats[col]['median']
+                    missing_before = df[col].isnull().sum()
+                    df[col] = df[col].fillna(median_val)
+                    if missing_before > 0:
+                        print(f"  {col}: {missing_before} missing → filled with training median {median_val:.4f}")
+                else:
+                    # 훈련 데이터 통계가 없으면 현재 데이터의 중앙값 사용
+                    df[col] = df[col].fillna(df[col].median())
+
+                # 2. 극단값 클리핑 (추론 시에도 일관성 유지)
+                q99 = df[col].quantile(0.99)
+                q01 = df[col].quantile(0.01)
+                outlier_mask = (df[col] > q99) | (df[col] < q01)
+                if outlier_mask.sum() > 0:
+                    df[col] = np.clip(df[col], q01, q99)
+
+        # 3. 훈련된 스케일러 적용
+        df[self.numerical_features] = self.scaler.transform(df[self.numerical_features])
+        print(f"  Applied trained RobustScaler to {len(self.numerical_features)} numerical features")
+
+        # float32로 변환
+        df[self.numerical_features] = df[self.numerical_features].astype(np.float32)
+
+        return df
 
 class DeepFM(nn.Module):
     """DeepFM 모델 구현"""
@@ -190,10 +226,10 @@ def predict_with_saved_model():
         seq_features = processor.process_sequence_features(test['seq'])
         test = pd.concat([test, seq_features], axis=1)
 
-    # 수치형 피처 처리
+    # 수치형 피처 처리 (개선된 방식)
     existing_numerical = [col for col in processor.numerical_features if col in test.columns]
     if existing_numerical:
-        test[existing_numerical] = test[existing_numerical].fillna(0).astype(np.float32)
+        test = processor.preprocess_numerical_features_inference(test)
 
     print(f"✅ Test data processed: {test.shape}")
 
