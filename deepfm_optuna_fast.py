@@ -1,5 +1,6 @@
 """
-DeepFM 빠른 하이퍼파라미터 최적화 스크립트 (전처리된 데이터 사용)
+DeepFM 전체 데이터 하이퍼파라미터 최적화 스크립트 (전처리된 데이터 사용)
+정확한 최적화를 위해 전체 10.7M 데이터 사용
 """
 
 import os
@@ -131,17 +132,22 @@ def objective(trial):
     # GPU 설정
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    # 하이퍼파라미터 제안
+    # 하이퍼파라미터 제안 (현재 최적값 중심으로 좁은 범위)
     params = {
-        'BATCH_SIZE': trial.suggest_categorical('batch_size', [256, 512, 1024, 2048]),
-        'LEARNING_RATE': trial.suggest_float('learning_rate', 1e-4, 1e-2, log=True),
-        'EMBEDDING_DIM': trial.suggest_categorical('embedding_dim', [8, 16, 24, 32, 48]),
-        'HIDDEN_UNITS': trial.suggest_categorical('hidden_units',
-            [[256, 128], [512, 256], [512, 256, 128], [1024, 512, 256]]),
-        'DROPOUT': trial.suggest_float('dropout', 0.1, 0.5),
+        'BATCH_SIZE': trial.suggest_categorical('batch_size', [256, 512, 1024]),  # 2048 제거
+        'LEARNING_RATE': trial.suggest_float('learning_rate', 1e-4, 5e-3, log=True),  # 범위 좁힘
+        'EMBEDDING_DIM': trial.suggest_categorical('embedding_dim', [16, 24, 32, 48]),  # 현재 최적값(24) 중심
+        'HIDDEN_UNITS': trial.suggest_categorical('hidden_units', [
+            [256, 128],
+            [512, 256],
+            [512, 256, 128],  # 현재 최적값
+            [768, 384, 128],
+            [1024, 512, 256]
+        ]),
+        'DROPOUT': trial.suggest_float('dropout', 0.2, 0.5),  # 현재 최적값(0.337) 중심
         'WEIGHT_DECAY': trial.suggest_float('weight_decay', 1e-7, 1e-4, log=True),
-        'EPOCHS': 5,  # 빠른 실험을 위해 적은 에포크
-        'EARLY_STOPPING': 2,
+        'EPOCHS': 5,  # 전체 데이터이므로 에포크 줄임 (시간 절약)
+        'EARLY_STOPPING': 2,  # 전체 데이터는 더 빨리 수렴
     }
 
     try:
@@ -215,6 +221,15 @@ def objective(trial):
                 'val_auc': val_auc
             })
 
+            # Optuna pruning을 위한 intermediate value 보고
+            trial.report(val_auc, epoch)
+
+            # Pruning 체크
+            if trial.should_prune():
+                print(f"    Trial pruned at epoch {epoch+1}")
+                wandb.log({'pruned': True, 'pruned_epoch': epoch + 1})
+                raise optuna.TrialPruned()
+
             # 최고 성능 추적
             if val_auc > best_auc:
                 best_auc = val_auc
@@ -239,6 +254,11 @@ def objective(trial):
         torch.cuda.empty_cache()
 
         return best_auc
+
+    except optuna.TrialPruned:
+        # Pruned trial - 정상적인 종료
+        wandb.finish()
+        raise
 
     except Exception as e:
         print(f"Trial {trial.number} failed: {e}")
@@ -269,7 +289,11 @@ def main():
         direction="maximize",
         load_if_exists=True,
         sampler=optuna.samplers.TPESampler(seed=42),
-        pruner=optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=2)
+        pruner=optuna.pruners.MedianPruner(
+            n_startup_trials=5,   # 전체 데이터이므로 더 빨리 pruning 시작
+            n_warmup_steps=2,     # epoch 2 이후부터 pruning 고려 (전체 데이터는 빠르게 수렴)
+            interval_steps=1      # 매 epoch마다 체크
+        )
     )
 
     print(f"Optuna study created: {study_name}")
@@ -281,8 +305,8 @@ def main():
     try:
         study.optimize(
             objective,
-            n_trials=50,  # DeepFM 최적화용 트라이얼 수
-            timeout=3600 * 4,  # 4시간 타임아웃
+            n_trials=25,  # 전체 데이터이므로 trial 수 줄임 (더 정확하지만 시간 오래 걸림)
+            timeout=3600 * 8,  # 8시간 타임아웃 (전체 데이터이므로 더 길게)
             show_progress_bar=True
         )
     except KeyboardInterrupt:

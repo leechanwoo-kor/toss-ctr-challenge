@@ -27,13 +27,14 @@ def main():
     all_train = pd.read_parquet("data/train.parquet", engine="pyarrow")
     print(f"Full training data loaded: {all_train.shape}")
 
-    # 샘플링 설정
+    # 샘플링 설정 - 전체 데이터 사용 (Optuna 포함)
     sample_size = DEEPFM_CONFIG['SAMPLE_SIZE']
+
     if sample_size:
         all_train = all_train.sample(n=sample_size, random_state=DEEPFM_CONFIG['SEED'])
         print(f"Sampled to: {all_train.shape}")
     else:
-        print("Using full dataset")
+        print("🔥 Using full dataset for accurate hyperparameter optimization")
 
     print(f"Training data ready: {all_train.shape}")
 
