@@ -178,46 +178,53 @@ class InferenceFeatureProcessor(BaseFeatureProcessor):
 
             df[col] = self.categorical_encoders[col].transform(df[col])
 
-        # 시퀀스 피처 처리
+        # 기존 수치형 피처만 먼저 처리 (스케일러 적용 전)
+        original_numerical = [col for col in self.numerical_features
+                             if col in df.columns and not col.startswith('seq_')]
+        if original_numerical:
+            df = self.preprocess_original_numerical_features_inference(df, original_numerical)
+
+        # 시퀀스 피처 처리 (스케일러 적용 후)
         if 'seq' in df.columns:
             seq_features = self.process_sequence_features(df['seq'])
             df = pd.concat([df, seq_features], axis=1)
 
-        # 수치형 피처 처리 (추론용)
-        existing_numerical = [col for col in self.numerical_features if col in df.columns]
-        if existing_numerical:
-            df = self.preprocess_numerical_features_inference(df)
+            # 새로운 시퀀스 피처들을 후처리
+            seq_cols = [col for col in seq_features.columns]
+            for col in seq_cols:
+                if col in self.numerical_stats:
+                    median_val = self.numerical_stats[col]['median']
+                    df[col] = df[col].fillna(median_val)
 
         return df
 
-    def preprocess_numerical_features_inference(self, df):
-        """추론용 개선된 수치형 피처 전처리"""
+    def preprocess_original_numerical_features_inference(self, df, original_numerical):
+        """추론용 기존 수치형 피처 전처리 (시퀀스 피처 제외)"""
         print("🔧 Applying improved numerical preprocessing for inference...")
 
         # 1. 훈련 시 저장된 통계로 결측치 대체
-        for col in self.numerical_features:
-            if col in df.columns:
-                if col in self.numerical_stats:
-                    median_val = self.numerical_stats[col]['median']
-                    missing_before = df[col].isnull().sum()
-                    df[col] = df[col].fillna(median_val)
-                    if missing_before > 0:
-                        print(f"  {col}: {missing_before} missing → filled with training median {median_val:.4f}")
-                else:
-                    df[col] = df[col].fillna(df[col].median())
+        for col in original_numerical:
+            if col in self.numerical_stats:
+                median_val = self.numerical_stats[col]['median']
+                missing_before = df[col].isnull().sum()
+                df[col] = df[col].fillna(median_val)
+                if missing_before > 0:
+                    print(f"  {col}: {missing_before} missing → filled with training median {median_val:.4f}")
+            else:
+                df[col] = df[col].fillna(df[col].median())
 
-                # 2. 극단값 클리핑
-                q99 = df[col].quantile(0.99)
-                q01 = df[col].quantile(0.01)
-                outlier_mask = (df[col] > q99) | (df[col] < q01)
-                if outlier_mask.sum() > 0:
-                    df[col] = np.clip(df[col], q01, q99)
+            # 2. 극단값 클리핑
+            q99 = df[col].quantile(0.99)
+            q01 = df[col].quantile(0.01)
+            outlier_mask = (df[col] > q99) | (df[col] < q01)
+            if outlier_mask.sum() > 0:
+                df[col] = np.clip(df[col], q01, q99)
 
-        # 3. 훈련된 스케일러 적용
-        df[self.numerical_features] = self.scaler.transform(df[self.numerical_features])
-        print(f"  Applied trained RobustScaler to {len(self.numerical_features)} numerical features")
+        # 3. 훈련된 스케일러 적용 (기존 피처만)
+        df[original_numerical] = self.scaler.transform(df[original_numerical])
+        print(f"  Applied trained RobustScaler to {len(original_numerical)} original numerical features")
 
         # float32로 변환
-        df[self.numerical_features] = df[self.numerical_features].astype(np.float32)
+        df[original_numerical] = df[original_numerical].astype(np.float32)
 
         return df
