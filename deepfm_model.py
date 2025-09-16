@@ -23,15 +23,15 @@ from torch.utils.data import Dataset, DataLoader
 import wandb
 from datetime import datetime
 
-# DeepFM Configuration
+# DeepFM Configuration (개선된 하이퍼파라미터)
 DEEPFM_CFG = {
     'SAMPLE_SIZE': None,         # 전체 데이터 사용 (10.7M)
     'BATCH_SIZE': 1024,
     'EPOCHS': 10,
-    'LEARNING_RATE': 1e-3,
-    'EMBEDDING_DIM': 16,         # 임베딩 차원
-    'HIDDEN_UNITS': [512, 256, 128],
-    'DROPOUT': 0.2,
+    'LEARNING_RATE': 5e-4,       # 1e-3 → 5e-4 (안정성 증가)
+    'EMBEDDING_DIM': 32,         # 16 → 32 (표현력 증가)
+    'HIDDEN_UNITS': [768, 512, 256], # [512,256,128] → [768,512,256] (용량 증가)
+    'DROPOUT': 0.3,              # 0.2 → 0.3 (과적합 방지)
     'SEED': 42,
     'EARLY_STOPPING': 5,
 }
@@ -40,8 +40,8 @@ DEEPFM_CFG = {
 WANDB_CFG = {
     'PROJECT': 'toss-ctr-deepfm',
     'ENTITY': None,  # 개인 계정 사용
-    'TAGS': ['deepfm', 'improved-preprocessing', 'full-dataset'],
-    'NOTES': 'DeepFM with improved preprocessing: median imputation, outlier clipping, robust scaling'
+    'TAGS': ['deepfm', 'improved-preprocessing', 'tuned-hyperparams', 'full-dataset'],
+    'NOTES': 'DeepFM with improved preprocessing + tuned hyperparams: LR=5e-4, EMB=32, Hidden=[768,512,256], Dropout=0.3'
 }
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
