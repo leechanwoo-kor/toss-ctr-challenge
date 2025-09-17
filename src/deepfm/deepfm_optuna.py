@@ -12,6 +12,7 @@ import pandas as pd
 import pickle
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from datetime import datetime
@@ -122,6 +123,42 @@ def validate(model, dataloader, device):
     return metrics['comp_score'], metrics['auc']
 
 
+class FocalLoss(nn.Module):
+    """Focal Loss for addressing class imbalance and hard examples"""
+
+    def __init__(self, alpha=0.25, gamma=2.0, pos_weight=None):
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.pos_weight = pos_weight
+
+    def forward(self, inputs, targets):
+        # BCE with logits
+        if self.pos_weight is not None:
+            bce_loss = F.binary_cross_entropy_with_logits(
+                inputs, targets, pos_weight=self.pos_weight, reduction='none'
+            )
+        else:
+            bce_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction='none')
+
+        # Sigmoid probability
+        pt = torch.sigmoid(inputs)
+        # For binary classification: pt = p if target=1, else pt = 1-p
+        pt = targets * pt + (1 - targets) * (1 - pt)
+
+        # Focal weight: (1-pt)^gamma
+        focal_weight = (1 - pt) ** self.gamma
+
+        # Alpha weighting
+        if self.alpha is not None:
+            alpha_t = targets * self.alpha + (1 - targets) * (1 - self.alpha)
+            focal_loss = alpha_t * focal_weight * bce_loss
+        else:
+            focal_loss = focal_weight * bce_loss
+
+        return focal_loss.mean()
+
+
 def objective(trial):
     """Optuna 최적화 목적 함수"""
     print(f"\n🔄 Trial {trial.number} started...")
@@ -183,8 +220,13 @@ def objective(trial):
             num_numerical=metadata['num_numerical']
         ).to(device)
 
-        # 옵티마이저 및 손실함수
-        criterion = nn.BCEWithLogitsLoss()
+        # 옵티마이저 및 손실함수 (Focal Loss 적용)
+        pos_weight = torch.tensor([98.1 / 1.9]).to(device)  # ~51.6
+        criterion = FocalLoss(
+            alpha=0.25,
+            gamma=2.0,
+            pos_weight=pos_weight
+        )
         optimizer = optim.Adam(
             model.parameters(),
             lr=params['LEARNING_RATE'],
@@ -213,6 +255,7 @@ def objective(trial):
 
             # 검증 (경쟁 점수와 AUC 모두 반환)
             val_comp_score, val_auc = validate(model, val_loader, device)
+            # Temperature scaling은 Optuna에서 생략 (속도 우선)
 
             print(f"  Epoch {epoch+1}: Train Loss {train_loss:.4f}, Val AUC {val_auc:.4f}, Competition Score {val_comp_score:.4f}")
 

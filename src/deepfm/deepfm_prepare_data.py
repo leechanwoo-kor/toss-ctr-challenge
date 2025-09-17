@@ -156,7 +156,7 @@ def main():
     print(f"  Val dataset: {val_size:.2f} GB")
     print(f"  Total: {train_size + val_size:.2f} GB")
 
-    print("\n🚀 Ready for DeepFM fast training!")
+    print("\n🚀 Ready for DeepFM training!")
 
 
 if __name__ == "__main__":
