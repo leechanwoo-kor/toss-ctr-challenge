@@ -204,6 +204,95 @@ class TrainingFeatureProcessor(BaseFeatureProcessor):
         return df
 
 
+class TreeBasedFeatureProcessor(BaseFeatureProcessor):
+    """트리 기반 모델(LightGBM/XGBoost) 전용 피처 전처리기"""
+
+    def __init__(self):
+        super().__init__()
+        # 트리 모델은 정규화가 불필요하므로 scaler 제거
+        self.scaler = None
+
+    def fit_transform(self, df):
+        """트리 모델에 최적화된 피처 전처리"""
+        print("🌳 Processing features for Tree-based models (LightGBM/XGBoost)...")
+
+        # 범주형 피처 정의
+        self.categorical_features = [col for col in CATEGORICAL_FEATURES if col in df.columns]
+
+        # 수치형 피처 정의
+        self.numerical_features = [col for col in df.columns
+                                 if col not in EXCLUDE_COLUMNS
+                                 and col not in self.categorical_features]
+
+        print(f"Categorical features ({len(self.categorical_features)}): {self.categorical_features}")
+        print(f"Numerical features ({len(self.numerical_features)}): {len(self.numerical_features)}")
+
+        # 범주형 피처 인코딩
+        for col in self.categorical_features:
+            df[col] = df[col].fillna('unknown').astype(str)
+
+            le = LabelEncoder()
+            df[col] = le.fit_transform(df[col])
+            self.categorical_encoders[col] = le
+
+            self.feature_dims[col] = len(le.classes_)
+            print(f"  {col}: {self.feature_dims[col]} categories")
+
+        # 수치형 피처 전처리 (트리 최적화)
+        df = self.preprocess_numerical_features_for_trees(df)
+
+        # 시퀀스 피처 처리 (NVIDIA Merlin 방식: 완전 제거)
+        if 'seq' in df.columns:
+            print("🚀 Excluding sequence column (following NVIDIA Merlin approach)")
+            df = df.drop('seq', axis=1)
+
+        return df
+
+    def preprocess_numerical_features_for_trees(self, df):
+        """트리 모델에 최적화된 수치형 피처 전처리 (정규화 없음)"""
+        print("🌳 Applying tree-optimized numerical preprocessing (NO scaling)...")
+
+        # 1. 결측치 처리 + 이상치 클리핑만 수행 (정규화 생략)
+        for col in self.numerical_features:
+            if col in df.columns:
+                df = self._apply_numerical_preprocessing_step(df, col, is_training=True)
+
+        # 2. 정규화 생략 - 트리 모델은 원본 값의 분포가 중요
+        print(f"  Skipped scaling for {len(self.numerical_features)} numerical features (tree-optimized)")
+
+        # 3. float32로 변환 (메모리 최적화)
+        for col in self.numerical_features:
+            if col in df.columns:
+                df[col] = df[col].astype(np.float32)
+
+        return df
+
+    def transform(self, df):
+        """추론용 변환 (트리 모델 최적화)"""
+        # 범주형 피처 변환
+        for col in self.categorical_features:
+            df[col] = df[col].fillna('unknown').astype(str)
+
+            # 새로운 카테고리는 'unknown'으로 처리
+            unknown_mask = ~df[col].isin(self.categorical_encoders[col].classes_)
+            df.loc[unknown_mask, col] = 'unknown'
+
+            df[col] = self.categorical_encoders[col].transform(df[col])
+
+        # 수치형 피처 처리 (정규화 없음)
+        original_numerical = [col for col in self.numerical_features
+                             if col in df.columns and not col.startswith('seq_')]
+        if original_numerical:
+            for col in original_numerical:
+                df = self._apply_numerical_preprocessing_step(df, col, is_training=False)
+
+        # 시퀀스 피처 처리 (NVIDIA Merlin 방식: 완전 제거)
+        if 'seq' in df.columns:
+            df = df.drop('seq', axis=1)
+
+        return df
+
+
 class InferenceFeatureProcessor(BaseFeatureProcessor):
     """추론용 피처 전처리기"""
 

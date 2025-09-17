@@ -1,7 +1,7 @@
 # Data and Models
 data/
 submissions/
-*.pth
+checkpoints/
 
 # Python cache & logs
 __pycache__/

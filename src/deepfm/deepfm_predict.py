@@ -19,13 +19,13 @@ from ..models.feature_processor import InferenceFeatureProcessor
 
 def find_latest_model():
     """최신 실험 모델 자동 탐색"""
-    model_dir = "models/deepfm"
+    model_dir = "checkpoints/deepfm"
     if not os.path.exists(model_dir):
-        return "models/deepfm_modular_best_model.pth"  # fallback
+        return "checkpoints/deepfm_modular_best_model.pth"  # fallback
 
     experiments = [d for d in os.listdir(model_dir) if os.path.isdir(os.path.join(model_dir, d))]
     if not experiments:
-        return "models/deepfm_modular_best_model.pth"
+        return "checkpoints/deepfm_modular_best_model.pth"
 
     # 가장 최근 수정된 실험 디렉토리 찾기
     latest_exp = max(experiments, key=lambda x: os.path.getctime(os.path.join(model_dir, x)))
@@ -34,7 +34,7 @@ def find_latest_model():
     if os.path.exists(model_path):
         return model_path
     else:
-        return "models/deepfm_modular_best_model.pth"  # fallback
+        return "checkpoints/deepfm_modular_best_model.pth"  # fallback
 
 
 def predict_with_modular_model(model_path=None):
@@ -183,7 +183,7 @@ def predict_with_modular_model(model_path=None):
 
     # 실험별 고유 파일명 생성
     timestamp = datetime.now().strftime('%m%d_%H%M')
-    if 'models/deepfm' in model_path:
+    if 'checkpoints/deepfm' in model_path:
         exp_name = os.path.basename(os.path.dirname(model_path))
         file_suffix = f"{exp_name}_{timestamp}"
     else:

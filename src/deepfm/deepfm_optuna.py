@@ -393,16 +393,16 @@ def main():
         'EARLY_STOPPING': 5,
     }
 
-    os.makedirs('models', exist_ok=True)
-    with open('models/deepfm_optimized_config.pkl', 'wb') as f:
+    os.makedirs('checkpoints', exist_ok=True)
+    with open('checkpoints/deepfm_optimized_config.pkl', 'wb') as f:
         pickle.dump(optimized_config, f)
 
-    print("Optimized config saved to models/deepfm_optimized_config.pkl")
+    print("Optimized config saved to checkpoints/deepfm_optimized_config.pkl")
 
     # 트라이얼 히스토리 저장
     trials_df = study.trials_dataframe()
-    trials_df.to_csv('models/deepfm_optuna_trials.csv', index=False)
-    print("Trial history saved to models/deepfm_optuna_trials.csv")
+    trials_df.to_csv('checkpoints/deepfm_optuna_trials.csv', index=False)
+    print("Trial history saved to checkpoints/deepfm_optuna_trials.csv")
 
     # 상위 5개 트라이얼 출력
     print("\n🏆 Top 5 trials:")

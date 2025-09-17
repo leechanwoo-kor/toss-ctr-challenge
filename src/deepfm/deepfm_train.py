@@ -351,7 +351,7 @@ def main():
             patience_counter = 0
 
             # 실험별 모델 저장 디렉토리 생성
-            exp_dir = f"models/deepfm/{run_name}"
+            exp_dir = f"checkpoints/deepfm/{run_name}"
             os.makedirs(exp_dir, exist_ok=True)
             model_path = f"{exp_dir}/best_model.pth"
 
