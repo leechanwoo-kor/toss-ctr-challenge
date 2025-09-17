@@ -24,6 +24,33 @@ WANDB_CONFIG = {
     "NOTES": "DeepFM with industry standard hyperparams + Focal Loss",
 }
 
+# LightGBM 현업 표준 설정 (Airbnb/Booking.com 기준)
+LIGHTGBM_CONFIG = {
+    "objective": "binary",
+    "metric": "binary_logloss",
+    "boosting_type": "gbdt",
+    "num_leaves": 31,                    # 현업 표준
+    "learning_rate": 0.1,                # 현업 표준
+    "feature_fraction": 0.8,             # 과적합 방지
+    "bagging_fraction": 0.8,             # 안정성
+    "bagging_freq": 5,
+    "min_child_samples": 20,             # 불균형 데이터 대응
+    "num_boost_round": 1000,             # 충분한 트리 수
+    "early_stopping_rounds": 50,         # 조기 종료
+    "verbose": -1,
+    "random_state": 42,
+    "n_jobs": -1,                        # 모든 CPU 사용
+    "class_weight": "balanced",          # 불균형 처리
+}
+
+# LightGBM WandB 설정
+LIGHTGBM_WANDB_CONFIG = {
+    "PROJECT": "toss-ctr-lightgbm",
+    "ENTITY": None,
+    "TAGS": ["lightgbm", "tree-based", "industry-standard", "full-dataset"],
+    "NOTES": "LightGBM with industry standard hyperparams for CTR prediction",
+}
+
 # Optuna 설정
 OPTUNA_CONFIG = {
     "STUDY_NAME": "deepfm-hyperopt",
