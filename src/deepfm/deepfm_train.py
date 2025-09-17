@@ -261,8 +261,8 @@ def main():
     # Focal Loss for advanced class imbalance and hard example mining
     pos_weight = torch.tensor([98.1 / 1.9]).to(device)  # ~51.6
     criterion = FocalLoss(
-        alpha=0.25,         # 포지티브 클래스 가중치
-        gamma=2.0,          # 어려운 샘플 집중 정도
+        alpha=0.75,         # CTR용: positive에 더 집중 (0.25→0.75)
+        gamma=1.0,          # CTR용: 덜 극단적 focusing (2.0→1.0)
         pos_weight=pos_weight
     )
     optimizer = optim.Adam(
@@ -271,11 +271,11 @@ def main():
         weight_decay=DEEPFM_CONFIG['WEIGHT_DECAY']
     )
 
-    print(f"🎯 Advanced loss function - Focal Loss:")
-    print(f"  Alpha: 0.25 (focus on positive class)")
-    print(f"  Gamma: 2.0 (focus on hard examples)")
+    print(f"🎯 CTR-optimized Focal Loss:")
+    print(f"  Alpha: 0.75 (strong focus on positive class)")
+    print(f"  Gamma: 1.0 (moderate hard example focusing)")
     print(f"  Pos weight: {pos_weight.item():.1f} (address 98.1%/1.9% imbalance)")
-    print(f"  Expected improvement: 5-15% over Weighted BCE")
+    print(f"  CTR-tuned parameters for better precision/recall balance")
 
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
 

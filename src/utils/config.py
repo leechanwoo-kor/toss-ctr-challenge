@@ -2,16 +2,16 @@
 DeepFM 설정 관리
 """
 
-# DeepFM 최적 설정 (Optuna Trial 2 결과)
+# DeepFM 현업 표준 설정 (Google/Meta/ByteDance 기준)
 DEEPFM_CONFIG = {
     "SAMPLE_SIZE": None,  # 전체 데이터 사용 (10.7M)
-    "BATCH_SIZE": 512,  # Optuna 최적값
+    "BATCH_SIZE": 1024,  # 현업 표준 (더 큰 배치)
     "EPOCHS": 10,
-    "LEARNING_RATE": 0.000384,  # Optuna 최적값 (3.84e-4)
-    "EMBEDDING_DIM": 24,  # Optuna 최적값
-    "HIDDEN_UNITS": [512, 256, 128],  # Optuna 최적값
-    "DROPOUT": 0.337,  # Optuna 최적값
-    "WEIGHT_DECAY": 1.57e-6,  # Optuna 최적값
+    "LEARNING_RATE": 0.001,  # 현업 표준 (빠른 수렴)
+    "EMBEDDING_DIM": 32,  # 현업 표준 (더 큰 임베딩)
+    "HIDDEN_UNITS": [1024, 512, 256],  # 현업 표준 (더 큰 용량)
+    "DROPOUT": 0.2,  # 현업 표준 (낮은 드롭아웃)
+    "WEIGHT_DECAY": 1e-5,  # 현업 표준
     "SEED": 42,
     "EARLY_STOPPING": 5,
 }
@@ -20,8 +20,8 @@ DEEPFM_CONFIG = {
 WANDB_CONFIG = {
     "PROJECT": "toss-ctr-deepfm",
     "ENTITY": None,
-    "TAGS": ["deepfm", "improved-preprocessing", "tuned-hyperparams", "full-dataset"],
-    "NOTES": "DeepFM with improved preprocessing + tuned hyperparams",
+    "TAGS": ["deepfm", "industry-standard", "focal-loss", "full-dataset"],
+    "NOTES": "DeepFM with industry standard hyperparams + Focal Loss",
 }
 
 # Optuna 설정
