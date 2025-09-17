@@ -12,9 +12,9 @@ import pickle
 import torch
 from sklearn.model_selection import train_test_split
 
-from src.models.feature_processor import TrainingFeatureProcessor
-from src.models.deepfm_core import DeepFMDataset
-from src.utils.config import DEEPFM_CONFIG
+from ..models.feature_processor import TrainingFeatureProcessor
+from ..models.deepfm_core import DeepFMDataset
+from ..utils.config import DEEPFM_CONFIG
 
 
 def main():

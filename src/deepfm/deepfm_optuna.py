@@ -1,5 +1,5 @@
 """
-DeepFM 전체 데이터 하이퍼파라미터 최적화 스크립트 (전처리된 데이터 사용)
+DeepFM 하이퍼파라미터 최적화 스크립트 (전처리된 데이터 사용)
 정확한 최적화를 위해 전체 10.7M 데이터 사용
 """
 
@@ -19,8 +19,9 @@ from tqdm import tqdm
 import optuna
 import wandb
 
-from src.models.deepfm_core import DeepFM
-from src.utils.metrics import calculate_competition_metrics
+from ..models.deepfm_core import DeepFM
+from ..utils.metrics import calculate_competition_metrics
+from ..utils.config import WANDB_CONFIG
 
 
 def seed_everything(seed):
@@ -47,9 +48,9 @@ def load_prepared_data():
 
         data_dir = 'data/processed/deepfm'
 
-        # 데이터셋 로드
-        train_dataset = torch.load(f'{data_dir}/train_dataset.pt')
-        val_dataset = torch.load(f'{data_dir}/val_dataset.pt')
+        # 데이터셋 로드 (weights_only=False로 설정)
+        train_dataset = torch.load(f'{data_dir}/train_dataset.pt', weights_only=False)
+        val_dataset = torch.load(f'{data_dir}/val_dataset.pt', weights_only=False)
 
         # 메타데이터 로드
         with open(f'{data_dir}/metadata.pkl', 'rb') as f:
@@ -66,8 +67,8 @@ def load_prepared_data():
     return cached_data
 
 
-def train_epoch_fast(model, dataloader, criterion, optimizer, device):
-    """빠른 훈련 (체크포인트 없음)"""
+def train_epoch(model, dataloader, criterion, optimizer, device):
+    """훈련 (체크포인트 없음)"""
     model.train()
     total_loss = 0
     num_batches = 0
@@ -93,8 +94,8 @@ def train_epoch_fast(model, dataloader, criterion, optimizer, device):
     return total_loss / num_batches
 
 
-def validate_fast(model, dataloader, device):
-    """빠른 검증"""
+def validate(model, dataloader, device):
+    """검증 (경쟁 점수 포함)"""
     model.eval()
     all_preds = []
     all_targets = []
@@ -115,11 +116,10 @@ def validate_fast(model, dataloader, device):
     predictions = np.array(all_preds)
     targets = np.array(all_targets)
 
-    # AUC만 계산 (속도 최적화)
-    from sklearn.metrics import roc_auc_score
-    auc = roc_auc_score(targets, predictions)
+    # 경쟁 메트릭 계산 (업데이트된 함수 사용)
+    metrics = calculate_competition_metrics(targets, predictions)
 
-    return auc
+    return metrics['comp_score'], metrics['auc']
 
 
 def objective(trial):
@@ -194,35 +194,38 @@ def objective(trial):
         # WandB 초기화 (각 trial별)
         run_name = f"trial-{trial.number:03d}-{datetime.now().strftime('%H%M')}"
         wandb.init(
-            project='toss-ctr-deepfm',
+            project=WANDB_CONFIG['PROJECT'],
+            entity=WANDB_CONFIG['ENTITY'],
             name=run_name,
             config=params,
-            tags=['optuna', 'deepfm', 'fast-trial'],
+            tags=['optuna', 'deepfm', 'trial'],
             reinit=True
         )
 
-        # 빠른 훈련
+        # 훈련 (경쟁 점수 최적화)
+        best_comp_score = 0
         best_auc = 0
         patience_counter = 0
 
         for epoch in range(params['EPOCHS']):
             # 훈련
-            train_loss = train_epoch_fast(model, train_loader, criterion, optimizer, device)
+            train_loss = train_epoch(model, train_loader, criterion, optimizer, device)
 
-            # 검증
-            val_auc = validate_fast(model, val_loader, device)
+            # 검증 (경쟁 점수와 AUC 모두 반환)
+            val_comp_score, val_auc = validate(model, val_loader, device)
 
-            print(f"  Epoch {epoch+1}: Train Loss {train_loss:.4f}, Val AUC {val_auc:.4f}")
+            print(f"  Epoch {epoch+1}: Train Loss {train_loss:.4f}, Val AUC {val_auc:.4f}, Competition Score {val_comp_score:.4f}")
 
-            # WandB 로깅
+            # WandB 로깅 (경쟁 점수 포함)
             wandb.log({
                 'epoch': epoch + 1,
                 'train_loss': train_loss,
-                'val_auc': val_auc
+                'val_auc': val_auc,
+                'val_comp_score': val_comp_score
             })
 
-            # Optuna pruning을 위한 intermediate value 보고
-            trial.report(val_auc, epoch)
+            # Optuna pruning을 위한 intermediate value 보고 (경쟁 점수 기준)
+            trial.report(val_comp_score, epoch)
 
             # Pruning 체크
             if trial.should_prune():
@@ -230,8 +233,9 @@ def objective(trial):
                 wandb.log({'pruned': True, 'pruned_epoch': epoch + 1})
                 raise optuna.TrialPruned()
 
-            # 최고 성능 추적
-            if val_auc > best_auc:
+            # 최고 성능 추적 (경쟁 점수 기준)
+            if val_comp_score > best_comp_score:
+                best_comp_score = val_comp_score
                 best_auc = val_auc
                 patience_counter = 0
             else:
@@ -242,10 +246,13 @@ def objective(trial):
                 print(f"    Early stopping at epoch {epoch+1}")
                 break
 
-        print(f"Trial {trial.number} - Best AUC: {best_auc:.6f}")
+        print(f"Trial {trial.number} - Best Competition Score: {best_comp_score:.6f} (AUC: {best_auc:.6f})")
 
         # WandB 종료
-        wandb.log({'best_auc': best_auc})
+        wandb.log({
+            'best_comp_score': best_comp_score,
+            'best_auc': best_auc
+        })
         wandb.finish()
 
         # 메모리 정리
@@ -253,7 +260,7 @@ def objective(trial):
         gc.collect()
         torch.cuda.empty_cache()
 
-        return best_auc
+        return best_comp_score
 
     except optuna.TrialPruned:
         # Pruned trial - 정상적인 종료
@@ -267,7 +274,7 @@ def objective(trial):
 
 
 def main():
-    print("🚀 Starting DeepFM fast hyperparameter optimization...")
+    print("🚀 Starting DeepFM hyperparameter optimization...")
 
     # GPU 확인
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -280,7 +287,7 @@ def main():
     print(f"Data loaded and cached in {load_time:.2f} seconds")
 
     # Optuna 스터디 생성
-    study_name = "deepfm-fast-hyperopt"
+    study_name = "deepfm-hyperopt"
     storage_url = f"sqlite:///optuna_{study_name}.db"
 
     study = optuna.create_study(
@@ -297,7 +304,7 @@ def main():
     )
 
     print(f"Optuna study created: {study_name}")
-    print(f"Target: Maximize Validation AUC")
+    print(f"Target: Maximize Competition Score (AP 50% + WLL 50%)")
 
     # 최적화 실행
     start_time = time.time()
@@ -316,12 +323,12 @@ def main():
 
     # 결과 분석
     print("\n" + "="*60)
-    print("🎯 Fast Hyperparameter Optimization Results")
+    print("🎯 Hyperparameter Optimization Results")
     print("="*60)
 
     print(f"Total trials: {len(study.trials)}")
     print(f"Optimization time: {optimization_time:.2f} seconds")
-    print(f"Best AUC: {study.best_value:.6f}")
+    print(f"Best Competition Score: {study.best_value:.6f}")
 
     print("\n📊 Best hyperparameters:")
     for key, value in study.best_params.items():
@@ -344,15 +351,15 @@ def main():
     }
 
     os.makedirs('models', exist_ok=True)
-    with open('models/deepfm_optimized_config_fast.pkl', 'wb') as f:
+    with open('models/deepfm_optimized_config.pkl', 'wb') as f:
         pickle.dump(optimized_config, f)
 
-    print("Optimized config saved to models/deepfm_optimized_config_fast.pkl")
+    print("Optimized config saved to models/deepfm_optimized_config.pkl")
 
     # 트라이얼 히스토리 저장
     trials_df = study.trials_dataframe()
-    trials_df.to_csv('models/deepfm_optuna_trials_fast.csv', index=False)
-    print("Trial history saved to models/deepfm_optuna_trials_fast.csv")
+    trials_df.to_csv('models/deepfm_optuna_trials.csv', index=False)
+    print("Trial history saved to models/deepfm_optuna_trials.csv")
 
     # 상위 5개 트라이얼 출력
     print("\n🏆 Top 5 trials:")
@@ -360,8 +367,8 @@ def main():
                                                  'params_learning_rate', 'params_embedding_dim']]
     print(top_trials.to_string(index=False))
 
-    print(f"\n🎉 DeepFM fast optimization completed!")
-    print(f"Best validation AUC: {study.best_value:.6f}")
+    print(f"\n🎉 DeepFM optimization completed!")
+    print(f"Best Competition Score: {study.best_value:.6f}")
     print(f"Speed improvement: ~{(50 * 12 * 60) / optimization_time:.1f}x faster")
 
     # 전역 캐시 정리

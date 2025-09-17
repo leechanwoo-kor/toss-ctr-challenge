@@ -17,9 +17,9 @@ from datetime import datetime
 from tqdm import tqdm
 import wandb
 
-from src.models.deepfm_core import DeepFM
-from src.utils.metrics import calculate_competition_metrics
-from src.utils.config import DEEPFM_CONFIG, WANDB_CONFIG
+from ..models.deepfm_core import DeepFM
+from ..utils.metrics import calculate_competition_metrics
+from ..utils.config import DEEPFM_CONFIG, WANDB_CONFIG
 
 
 def seed_everything(seed):
@@ -45,9 +45,9 @@ def load_prepared_data():
         if not os.path.exists(os.path.join(data_dir, file)):
             raise FileNotFoundError(f"Required file not found: {file}. Run 'python deepfm_prepare_data.py' first.")
 
-    # 데이터셋 로드
-    train_dataset = torch.load(f'{data_dir}/train_dataset.pt')
-    val_dataset = torch.load(f'{data_dir}/val_dataset.pt')
+    # 데이터셋 로드 (weights_only=False로 설정)
+    train_dataset = torch.load(f'{data_dir}/train_dataset.pt', weights_only=False)
+    val_dataset = torch.load(f'{data_dir}/val_dataset.pt', weights_only=False)
 
     # 메타데이터 로드
     with open(f'{data_dir}/metadata.pkl', 'rb') as f:
@@ -204,6 +204,7 @@ def main():
     training_start = time.time()
 
     best_auc = 0
+    best_comp_score = 0  # 대회 점수 추적
     patience_counter = 0
     train_losses = []
     val_aucs = []
@@ -218,6 +219,7 @@ def main():
         # 검증
         val_loss, val_metrics, val_predictions = validate_epoch(model, val_loader, criterion, device)
         val_auc = val_metrics['auc']
+        val_comp_score = val_metrics['comp_score']  # 대회 최종 점수
         val_aucs.append(val_auc)
 
         epoch_time = time.time() - epoch_start
@@ -226,35 +228,48 @@ def main():
         print(f"  Train Loss: {train_loss:.6f}")
         print(f"  Val Loss: {val_loss:.6f}")
         print(f"  Val AUC: {val_auc:.6f}")
+        print(f"  Competition Score: {val_comp_score:.6f}")
+        print(f"  AP: {val_metrics['ap']:.6f}, WLL: {val_metrics['wll']:.6f}")
         print(f"  Time: {epoch_time:.2f}s")
 
-        # WandB 로깅
+        # WandB 로깅 (대회 채점 기준 포함)
         wandb.log({
             'epoch': epoch + 1,
             'train_loss': train_loss,
             'val_loss': val_loss,
             'val_auc': val_auc,
+            'val_comp_score': val_comp_score,        # 🆕 대회 최종 점수
+            'val_ap': val_metrics['ap'],             # 🆕 Average Precision
+            'val_wll': val_metrics['wll'],           # 🆕 Weighted LogLoss
             'val_logloss': val_metrics['logloss'],
             'epoch_time': epoch_time
         })
 
-        # 최고 성능 모델 저장
-        if val_auc > best_auc:
+        # 최고 성능 모델 저장 (대회 점수 기준)
+        if val_comp_score > best_comp_score:
             best_auc = val_auc
+            best_comp_score = val_comp_score
             patience_counter = 0
 
-            # 모델 저장
-            os.makedirs('models', exist_ok=True)
-            model_path = f'models/deepfm_fast_{datetime.now().strftime("%m%d_%H%M")}.pth'
+            # 실험별 모델 저장 디렉토리 생성
+            exp_dir = f"models/deepfm/{run_name}"
+            os.makedirs(exp_dir, exist_ok=True)
+            model_path = f"{exp_dir}/best_model.pth"
+
             torch.save({
                 'model_state_dict': model.state_dict(),
                 'config': DEEPFM_CONFIG,
                 'metadata': metadata,
+                'processor': processor,
                 'epoch': epoch + 1,
-                'best_auc': best_auc
+                'best_auc': best_auc,
+                'best_comp_score': best_comp_score,
+                'best_metrics': val_metrics,
+                'timestamp': datetime.now().isoformat()
             }, model_path)
 
             print(f"  💾 New best model saved: {model_path}")
+            print(f"      Competition Score: {best_comp_score:.6f} (AUC: {best_auc:.6f})")
         else:
             patience_counter += 1
 
@@ -276,17 +291,20 @@ def main():
     print(f"Data Load Time: {load_time:.2f}s")
     print(f"Training Time: {training_time:.2f}s")
     print(f"Total Time: {total_time:.2f}s")
+    print(f"Best Competition Score: {best_comp_score:.6f}")
     print(f"Best Validation AUC: {best_auc:.6f}")
     print(f"Model saved: {model_path}")
 
     # 성능 비교 정보
     print(f"\n📈 Performance Summary:")
     print(f"Speed improvement: ~{(12*60 + 30) / total_time:.1f}x faster")  # 기존 처리 시간 대비
+    print(f"Best Competition Score: {best_comp_score:.6f}")
     print(f"Best AUC achieved: {best_auc:.6f}")
 
     # 최종 메트릭 로깅
     wandb.log({
         'best_auc': best_auc,
+        'best_comp_score': best_comp_score,
         'training_time': training_time,
         'total_time': total_time,
         'epochs_trained': epoch + 1
