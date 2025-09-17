@@ -118,6 +118,20 @@ def main():
     train_config = XGBOOST_CONFIG.copy()
     early_stopping_rounds = train_config.pop('early_stopping_rounds', 100)
 
+    # WandB 콜백 함수 생성
+    def wandb_callback(env):
+        """XGBoost evaluation 결과를 WandB에 실시간 로깅"""
+        if env.iteration % 10 == 0:  # 10 iteration마다 로깅
+            log_dict = {'iteration': env.iteration}
+
+            # evaluation 결과 로깅
+            for eval_name, eval_result in env.evaluation_result_list:
+                metric_name = eval_result.split(':')[0] if ':' in eval_result else 'metric'
+                metric_value = float(eval_result.split(':')[1]) if ':' in eval_result else float(eval_result)
+                log_dict[f'{eval_name}_{metric_name}'] = metric_value
+
+            wandb.log(log_dict)
+
     # 훈련 실행
     evals = [(dtrain, 'train'), (dval, 'val')]
     model = xgb.train(
@@ -126,7 +140,8 @@ def main():
         num_boost_round=train_config['n_estimators'],
         evals=evals,
         early_stopping_rounds=early_stopping_rounds,
-        verbose_eval=100
+        verbose_eval=100,
+        callbacks=[wandb_callback]  # WandB 콜백 추가
     )
 
     training_time = time.time() - training_start
@@ -177,6 +192,24 @@ def main():
 
     # 피처 중요도 저장
     feature_imp.to_csv(f"{model_dir}/feature_importance.csv", index=False)
+
+    # WandB에 Feature Importance 로깅
+    wandb.log({
+        "feature_importance": wandb.Table(
+            dataframe=feature_imp.head(20),  # 상위 20개 피처
+            columns=["feature", "importance"]
+        )
+    })
+
+    # 예측 분포 히스토그램 로깅
+    wandb.log({
+        "train_predictions_hist": wandb.Histogram(train_preds),
+        "val_predictions_hist": wandb.Histogram(val_preds),
+        "train_predictions_mean": train_preds.mean(),
+        "val_predictions_mean": val_preds.mean(),
+        "train_predictions_std": train_preds.std(),
+        "val_predictions_std": val_preds.std(),
+    })
 
     # 8. 최종 결과
     total_time = time.time() - start_time

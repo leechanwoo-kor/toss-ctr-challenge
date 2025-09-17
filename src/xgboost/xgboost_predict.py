@@ -209,8 +209,29 @@ def predict_with_xgboost(model_path=None, metadata_path=None):
 
 
 if __name__ == "__main__":
+    import sys
+
+    # 명령행 인자로 모델 경로 지정 가능
+    model_path = None
+    metadata_path = None
+
+    if len(sys.argv) > 1:
+        model_path = sys.argv[1]
+        # 메타데이터 경로 추정
+        model_dir = os.path.dirname(model_path)
+        metadata_path = os.path.join(model_dir, "model_metadata.pkl")
+
+        if not os.path.exists(metadata_path):
+            # 다른 가능한 메타데이터 파일명들 시도
+            possible_names = ["metadata.pkl", "model_info.pkl"]
+            for name in possible_names:
+                test_path = os.path.join(model_dir, name)
+                if os.path.exists(test_path):
+                    metadata_path = test_path
+                    break
+
     try:
-        predictions = predict_with_xgboost()
+        predictions = predict_with_xgboost(model_path, metadata_path)
         print("\\n🏆 Prediction completed successfully!")
     except Exception as e:
         print(f"\\n❌ Error: {e}")

@@ -66,8 +66,8 @@ XGBOOST_CONFIG = {
     "device": "cuda:0",                  # GPU 가속 (새로운 방식)
     "tree_method": "hist",               # 히스토그램 방식
     "max_depth": 8,                      # 깊이 제한
-    "learning_rate": 0.05,               # 안정적 수렴
-    "n_estimators": 3000,                # 충분한 트리 수
+    "learning_rate": 0.1,               # 안정적 수렴
+    "n_estimators": 200,                # 충분한 트리 수
     "subsample": 0.9,                    # 행 샘플링
     "colsample_bytree": 0.9,             # 열 샘플링
     "colsample_bylevel": 0.9,            # 레벨별 열 샘플링
@@ -78,7 +78,15 @@ XGBOOST_CONFIG = {
     "random_state": 42,
     "n_jobs": -1,
     "verbosity": 0,
-    "early_stopping_rounds": 100,
+    "early_stopping_rounds": 20,
+}
+
+# K-Fold Cross Validation 설정
+KFOLD_CONFIG = {
+    "n_splits": 5,                       # 5-fold CV
+    "shuffle": True,                     # 데이터 셔플
+    "random_state": 42,                  # 재현성
+    "stratify": True,                    # 층화 표본추출
 }
 
 # XGBoost WandB 설정
@@ -89,7 +97,7 @@ XGBOOST_WANDB_CONFIG = {
     "NOTES": "XGBoost with industry standard hyperparams for CTR prediction",
 }
 
-# Optuna 설정
+# Optuna 설정 (DeepFM용)
 OPTUNA_CONFIG = {
     "STUDY_NAME": "deepfm-hyperopt",
     "N_TRIALS": 50,
@@ -97,6 +105,16 @@ OPTUNA_CONFIG = {
     "EARLY_STOPPING": 2,
     "SAMPLE_SIZE": 2000000,
     "TIMEOUT": 3600 * 12,
+}
+
+# XGBoost Optuna 설정
+XGBOOST_OPTUNA_CONFIG = {
+    "STUDY_NAME": "xgboost-hyperopt",
+    "N_TRIALS": 50,
+    "TIMEOUT": 3600 * 4,  # 4시간
+    "PRUNER": "MedianPruner",
+    "N_STARTUP_TRIALS": 5,
+    "N_WARMUP_STEPS": 100,
 }
 
 # 카테고리 피처 정의
