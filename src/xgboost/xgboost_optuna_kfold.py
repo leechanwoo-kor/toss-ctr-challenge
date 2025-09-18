@@ -223,7 +223,7 @@ def main():
     print(f"🔄 K-Fold: {KFOLD_CONFIG['n_splits']}-fold Cross Validation")
 
     # 최적화 실행 - "Less is More" 전략
-    n_trials = 20  # 빠른 실험으로 효율성 중시
+    n_trials = 50  # 더 철저한 탐색으로 최적해 발견
     print(f"🚀 Starting optimization with {n_trials} trials...")
     print(f"🎯 Strategy: Less is More - Simple & Stable models")
 
