@@ -31,7 +31,7 @@ def load_prepared_data():
     """전처리된 데이터 로드"""
     print("📁 Loading prepared data...")
 
-    data_dir = 'data/processed/xgboost'
+    data_dir = 'data/processed/xgboost_enhanced'
 
     # 데이터 파일 존재 확인
     required_files = ['X_train.npy', 'X_val.npy', 'y_train.npy', 'y_val.npy',
@@ -77,14 +77,14 @@ def objective(trial):
 
         # 🔥 일반화 성능 최우선 파라미터들
         "max_depth": trial.suggest_int("max_depth", 4, 6),                    # 얕은 트리로 과적합 방지
-        "learning_rate": trial.suggest_float("learning_rate", 0.05, 0.15),    # 빠른 수렴
-        "n_estimators": trial.suggest_int("n_estimators", 100, 300, step=50), # 적은 트리 수
-        "subsample": trial.suggest_float("subsample", 0.6, 0.8),              # 강한 샘플링
-        "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 0.8), # 강한 피처 샘플링
-        "colsample_bylevel": trial.suggest_float("colsample_bylevel", 0.7, 0.9), # 적당한 레벨 샘플링
-        "min_child_weight": trial.suggest_int("min_child_weight", 100, 500),   # 강한 제약
-        "reg_alpha": trial.suggest_float("reg_alpha", 0.3, 1.5, log=True),     # 강한 L1 정규화
-        "reg_lambda": trial.suggest_float("reg_lambda", 0.3, 1.5, log=True),   # 강한 L2 정규화
+        "learning_rate": trial.suggest_float("learning_rate", 0.05, 0.2),     # 범위 확장
+        "n_estimators": trial.suggest_int("n_estimators", 200, 500, step=50), # 더 많은 트리
+        "subsample": trial.suggest_float("subsample", 0.7, 0.9),              # 덜 강한 샘플링
+        "colsample_bytree": trial.suggest_float("colsample_bytree", 0.7, 0.9), # 덜 강한 피처 샘플링
+        "colsample_bylevel": trial.suggest_float("colsample_bylevel", 0.7, 0.9), # 동일
+        "min_child_weight": trial.suggest_int("min_child_weight", 50, 300),    # 제약 완화
+        "reg_alpha": trial.suggest_float("reg_alpha", 0.1, 1.0, log=True),     # 정규화 완화
+        "reg_lambda": trial.suggest_float("reg_lambda", 0.1, 1.0, log=True),   # 정규화 완화
 
         # 고정 파라미터들
         "scale_pos_weight": 51.6,
@@ -151,9 +151,9 @@ def objective(trial):
     cv_mean = np.mean(cv_scores)
     cv_std = np.std(cv_scores)
 
-    # 🎯 일반화 성능 중심 목적 함수
-    # CV 표준편차가 클수록 페널티 (일관성 없는 모델 회피)
-    generalization_penalty = cv_std * 3.0  # 표준편차 3배 페널티
+    # 🎯 더 균형잡힌 목적 함수
+    # CV 표준편차 페널티를 줄임
+    generalization_penalty = cv_std * 1.0  # 표준편차 1배 페널티 (기존 3배에서 감소)
     objective_score = cv_mean - generalization_penalty
 
     # WandB에 trial 결과 로깅

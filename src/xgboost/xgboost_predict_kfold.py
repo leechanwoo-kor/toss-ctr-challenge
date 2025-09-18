@@ -46,7 +46,7 @@ def load_test_data():
     print(f"Test data shape: {test.shape}")
 
     # 전처리된 데이터 로드 (XGBoost 학습에 사용된 것과 동일)
-    data_dir = 'data/processed/xgboost'
+    data_dir = 'data/processed/xgboost_enhanced'
 
     # 프로세서 로드
     with open(f'{data_dir}/processor.pkl', 'rb') as f:

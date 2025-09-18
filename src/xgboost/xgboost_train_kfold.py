@@ -25,7 +25,7 @@ def load_prepared_data():
     """Load prepared training and validation data"""
     print("📁 Loading prepared data...")
 
-    data_dir = 'data/processed/xgboost'
+    data_dir = 'data/processed/xgboost_enhanced'
 
     # 데이터 파일 존재 확인
     required_files = ['X_train.npy', 'X_val.npy', 'y_train.npy', 'y_val.npy',
