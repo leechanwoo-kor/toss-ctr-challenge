@@ -2,6 +2,7 @@
 data/
 submissions/
 checkpoints/
+optuna_studies/
 
 # Python cache & logs
 __pycache__/
