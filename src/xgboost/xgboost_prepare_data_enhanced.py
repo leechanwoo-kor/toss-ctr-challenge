@@ -73,11 +73,18 @@ def prepare_enhanced_xgboost_data():
 
     print(f"\n💾 Saving to {output_dir}...")
 
-    # 데이터 저장
-    np.save(f'{output_dir}/X_train.npy', X_train.values)
-    np.save(f'{output_dir}/X_val.npy', X_val.values)
-    np.save(f'{output_dir}/y_train.npy', y_train)
-    np.save(f'{output_dir}/y_val.npy', y_val)
+    # 데이터 저장 (메모리 효율적 방법)
+    print("💾 Saving arrays with memory optimization...")
+    X_train_array = X_train.to_numpy(dtype=np.float32)
+    X_val_array = X_val.to_numpy(dtype=np.float32)
+
+    np.save(f'{output_dir}/X_train.npy', X_train_array)
+    np.save(f'{output_dir}/X_val.npy', X_val_array)
+    np.save(f'{output_dir}/y_train.npy', y_train.astype(np.int8))
+    np.save(f'{output_dir}/y_val.npy', y_val.astype(np.int8))
+
+    # 메모리 정리
+    del X_train_array, X_val_array
 
     # 피처명 저장
     feature_names = list(X_train.columns)

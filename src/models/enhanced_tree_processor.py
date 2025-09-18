@@ -24,6 +24,13 @@ class EnhancedTreeFeatureProcessor(TreeBasedFeatureProcessor):
         self.hour_day_ctr = {}
         self.inventory_popularity = {}
         self.new_features = []
+        # 상수 피처 및 중복 피처 제거 목록
+        self.constant_features_to_remove = ['l_feat_20', 'l_feat_23']
+        self.duplicate_features_to_remove = ['l_feat_16', 'l_feat_17']  # l_feat_1, l_feat_9와 중복
+        self.statistical_insignificant_features = ['l_feat_24']  # 낮은 분산 + 낮은 상관관계
+
+        # feat_a 그룹 무조건 제거 (94.4%가 통계적으로 문제)
+        self.remove_feat_a_group = True
 
     def fit_transform(self, df):
         """트리 모델에 최적화된 피처 전처리 + EDA 기반 새 피처들"""
@@ -34,6 +41,9 @@ class EnhancedTreeFeatureProcessor(TreeBasedFeatureProcessor):
 
         # 기본 전처리 수행 (clicked 컬럼 제거)
         df = super().fit_transform(df)
+
+        # 상수 피처 제거
+        df = self._remove_constant_features(df)
 
         return df
 
@@ -46,6 +56,46 @@ class EnhancedTreeFeatureProcessor(TreeBasedFeatureProcessor):
 
         # 새로운 피처들 생성 (학습된 매핑 사용)
         df = self._create_eda_features(df, is_training=False)
+
+        # 상수 피처 제거
+        df = self._remove_constant_features(df)
+
+        return df
+
+    def _remove_constant_features(self, df):
+        """상수 피처 및 중복 피처들 제거"""
+        removed_features = []
+
+        # 상수 피처 제거
+        for feat in self.constant_features_to_remove:
+            if feat in df.columns:
+                df = df.drop(columns=[feat])
+                removed_features.append(feat)
+
+        # 중복 피처 제거
+        for feat in self.duplicate_features_to_remove:
+            if feat in df.columns:
+                df = df.drop(columns=[feat])
+                removed_features.append(feat)
+
+        # 통계적 무의미 피처 제거
+        for feat in self.statistical_insignificant_features:
+            if feat in df.columns:
+                df = df.drop(columns=[feat])
+                removed_features.append(feat)
+
+        # feat_a 그룹 제거 (옵션)
+        if self.remove_feat_a_group:
+            feat_a_features = [col for col in df.columns if col.startswith('feat_a_')]
+            for feat in feat_a_features:
+                df = df.drop(columns=[feat])
+                removed_features.append(feat)
+
+            if feat_a_features:
+                print(f"🗑️ Removed feat_a group: {len(feat_a_features)} features")
+
+        if removed_features:
+            print(f"🗑️ Removed features: {removed_features}")
 
         return df
 
@@ -123,39 +173,13 @@ class EnhancedTreeFeatureProcessor(TreeBasedFeatureProcessor):
             print(f"     ✅ inventory_ctr: mean={new_columns['inventory_ctr'].mean():.6f}")
             print(f"     ✅ inventory_popularity_rank: mean={new_columns['inventory_popularity_rank'].mean():.1f}")
 
-        # 3. 시간대별 CTR (0.0061 차이)
-        if has_hour:
-            if is_training and has_clicked:
-                print("  ⏰ Computing hourly CTR...")
-                self.hour_ctr = df.groupby('hour')['clicked'].mean().to_dict()
-                print(f"     Created {len(self.hour_ctr)} hourly CTR mappings")
+        # 3. 시간대별 CTR (제거됨 - 중요도 낮음)
+        # hour_ctr (rank 83), is_peak_hour (rank 77) 제거됨
 
-            # 매핑 적용
-            new_columns['hour_ctr'] = df['hour'].map(self.hour_ctr).fillna(0.019).astype(np.float32)
+        # 4. 요일별 CTR (제거됨 - 중요도 낮음)
+        # day_ctr (rank 56), is_weekend (rank 102) 제거됨
 
-            # 피크 시간대 여부 (새벽 2-4시) - 문자열 처리
-            new_columns['is_peak_hour'] = df['hour'].isin(['02', '03', '04']).astype(np.int8)
-            new_feature_count += 2
-            print(f"     ✅ hour_ctr: mean={new_columns['hour_ctr'].mean():.6f}")
-            print(f"     ✅ is_peak_hour: {new_columns['is_peak_hour'].sum()}/{len(df)} samples")
-
-        # 4. 요일별 CTR (0.0042 차이)
-        if has_day:
-            if is_training and has_clicked:
-                print("  📅 Computing daily CTR...")
-                self.day_ctr = df.groupby('day_of_week')['clicked'].mean().to_dict()
-                print(f"     Created {len(self.day_ctr)} daily CTR mappings")
-
-            # 매핑 적용
-            new_columns['day_ctr'] = df['day_of_week'].map(self.day_ctr).fillna(0.019).astype(np.float32)
-
-            # 주말 여부 (토/일: 6,7) - 문자열 처리
-            new_columns['is_weekend'] = df['day_of_week'].isin(['6', '7']).astype(np.int8)
-            new_feature_count += 2
-            print(f"     ✅ day_ctr: mean={new_columns['day_ctr'].mean():.6f}")
-            print(f"     ✅ is_weekend: {new_columns['is_weekend'].sum()}/{len(df)} samples")
-
-        # 5. 시간×요일 교차 CTR
+        # 5. 시간×요일 교차 CTR (유지 - 32위 중요도)
         if has_hour and has_day:
             if is_training and has_clicked:
                 print("  🕐📅 Computing hour×day CTR...")
@@ -214,11 +238,11 @@ class EnhancedTreeFeatureProcessor(TreeBasedFeatureProcessor):
             new_df = pd.concat([df, pd.DataFrame(new_columns)], axis=1)
             df = new_df
 
-        # 새 피처들을 numerical_features에 추가
+        # 새 피처들을 numerical_features에 추가 (중요도 낮은 시간 피처 제거)
         new_features = [
             'user_segment_ctr', 'inventory_ctr', 'inventory_popularity_rank',
-            'hour_ctr', 'is_peak_hour', 'day_ctr', 'is_weekend',
             'hour_day_ctr', 'inventory_ctr_quantile'
+            # 제거된 저중요도 시간 피처들: hour_ctr, is_peak_hour, day_ctr, is_weekend
         ]
 
         # 실제로 생성된 피처들만 추가
@@ -239,7 +263,7 @@ class EnhancedTreeFeatureProcessor(TreeBasedFeatureProcessor):
             'original_numerical': [f for f in self.numerical_features if f not in self.new_features],
             'eda_user_features': ['user_segment_ctr'],
             'eda_inventory_features': ['inventory_ctr', 'inventory_popularity_rank', 'inventory_ctr_quantile'],
-            'eda_temporal_features': ['hour_ctr', 'is_peak_hour', 'day_ctr', 'is_weekend', 'hour_day_ctr'],
+            'eda_temporal_features': ['hour_day_ctr'],
             'all_new_features': self.new_features
         }
 

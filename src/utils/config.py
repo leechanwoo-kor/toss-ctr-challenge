@@ -58,22 +58,22 @@ LIGHTGBM_WANDB_CONFIG = {
     "NOTES": "LightGBM with industry standard hyperparams for CTR prediction",
 }
 
-# XGBoost 현업 표준 설정 (Netflix/Uber 기준)
+# XGBoost Optuna 최적화 설정 (0918_0956 run)
 XGBOOST_CONFIG = {
     "objective": "binary:logistic",
     "eval_metric": "logloss",
     "booster": "gbtree",
-    "device": "cuda:0",                  # GPU 가속 (새로운 방식)
+    "device": "cuda:0",                  # GPU 가속
     "tree_method": "hist",               # 히스토그램 방식
-    "max_depth": 8,                      # 깊이 제한
-    "learning_rate": 0.1,               # 안정적 수렴
-    "n_estimators": 200,                # 충분한 트리 수
-    "subsample": 0.9,                    # 행 샘플링
-    "colsample_bytree": 0.9,             # 열 샘플링
-    "colsample_bylevel": 0.9,            # 레벨별 열 샘플링
-    "min_child_weight": 100,             # 큰 데이터셋용
-    "reg_alpha": 0.1,                    # L1 정규화
-    "reg_lambda": 0.1,                   # L2 정규화
+    "max_depth": 6,                      # Optuna 최적값
+    "learning_rate": 0.10482780049536987,# Optuna 최적값
+    "n_estimators": 350,                 # Optuna 최적값
+    "subsample": 0.893541279527371,      # Optuna 최적값
+    "colsample_bytree": 0.8463155771995123,  # Optuna 최적값
+    "colsample_bylevel": 0.7306308454158086, # Optuna 최적값
+    "min_child_weight": 124,             # Optuna 최적값
+    "reg_alpha": 0.5313277565751413,     # Optuna 최적값
+    "reg_lambda": 0.17231432092214186,   # Optuna 최적값
     "scale_pos_weight": 51.6,            # 클래스 불균형 (98.1/1.9)
     "random_state": 42,
     "n_jobs": -1,
