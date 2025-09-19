@@ -75,16 +75,16 @@ def objective(trial):
         "device": "cuda:0",
         "tree_method": "hist",
 
-        # 🔥 일반화 성능 최우선 파라미터들
-        "max_depth": trial.suggest_int("max_depth", 4, 6),                    # 얕은 트리로 과적합 방지
-        "learning_rate": trial.suggest_float("learning_rate", 0.05, 0.2),     # 범위 확장
-        "n_estimators": trial.suggest_int("n_estimators", 200, 500, step=50), # 더 많은 트리
-        "subsample": trial.suggest_float("subsample", 0.7, 0.9),              # 덜 강한 샘플링
-        "colsample_bytree": trial.suggest_float("colsample_bytree", 0.7, 0.9), # 덜 강한 피처 샘플링
-        "colsample_bylevel": trial.suggest_float("colsample_bylevel", 0.7, 0.9), # 동일
-        "min_child_weight": trial.suggest_int("min_child_weight", 50, 300),    # 제약 완화
-        "reg_alpha": trial.suggest_float("reg_alpha", 0.1, 1.0, log=True),     # 정규화 완화
-        "reg_lambda": trial.suggest_float("reg_lambda", 0.1, 1.0, log=True),   # 정규화 완화
+        # 🎯 현재 최고 성능(120 iter, max_depth=8) 주변 정밀 탐색
+        "max_depth": trial.suggest_int("max_depth", 6, 10),                    # 6-10으로 확장
+        "learning_rate": trial.suggest_float("learning_rate", 0.08, 0.15),     # 0.1 주변
+        "n_estimators": trial.suggest_int("n_estimators", 80, 200, step=20),   # 80-200으로 현실적
+        "subsample": trial.suggest_float("subsample", 0.85, 0.95),             # 0.9 주변
+        "colsample_bytree": trial.suggest_float("colsample_bytree", 0.85, 0.95), # 0.9 주변
+        "colsample_bylevel": trial.suggest_float("colsample_bylevel", 0.85, 0.95), # 0.9 주변
+        "min_child_weight": trial.suggest_int("min_child_weight", 1, 5),        # 1-5로 현실적
+        "reg_alpha": trial.suggest_float("reg_alpha", 0.05, 0.2),              # 0.1 주변
+        "reg_lambda": trial.suggest_float("reg_lambda", 0.05, 0.2),            # 0.1 주변
 
         # 고정 파라미터들
         "scale_pos_weight": 51.6,
@@ -222,10 +222,10 @@ def main():
     print(f"🎯 Target: Maximize Competition Score")
     print(f"🔄 K-Fold: {KFOLD_CONFIG['n_splits']}-fold Cross Validation")
 
-    # 최적화 실행 - "Less is More" 전략
-    n_trials = 50  # 더 철저한 탐색으로 최적해 발견
+    # 최적화 실행 - 현재 최고 성능 주변 정밀 탐색
+    n_trials = 50  # 정밀 탐색으로 최적해 발견
     print(f"🚀 Starting optimization with {n_trials} trials...")
-    print(f"🎯 Strategy: Less is More - Simple & Stable models")
+    print(f"🎯 Strategy: Fine-tuning around current best performance (120 iter, max_depth=8)")
 
     try:
         study.optimize(objective, n_trials=n_trials, timeout=3600*4)  # 4시간 제한

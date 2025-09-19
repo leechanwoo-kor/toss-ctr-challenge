@@ -1,6 +1,3 @@
-"""
-EDA 기반 피처 엔지니어링이 추가된 트리 모델용 프로세서
-"""
 
 import pandas as pd
 import numpy as np
@@ -12,240 +9,124 @@ from .feature_processor import TreeBasedFeatureProcessor
 
 
 class EnhancedTreeFeatureProcessor(TreeBasedFeatureProcessor):
-    """EDA 인사이트 기반 피처 엔지니어링이 추가된 트리 모델용 프로세서"""
 
     def __init__(self):
         super().__init__()
-        # 새로운 피처들을 위한 매핑 테이블들
-        self.user_segment_ctr = {}
-        self.inventory_ctr = {}
-        self.hour_ctr = {}
-        self.day_ctr = {}
-        self.hour_day_ctr = {}
         self.inventory_popularity = {}
+        self.age_inventory_affinity = {}
+        self.gender_inventory_affinity = {}
         self.new_features = []
-        # 상수 피처 및 중복 피처 제거 목록
-        self.constant_features_to_remove = ['l_feat_20', 'l_feat_23']
-        self.duplicate_features_to_remove = ['l_feat_16', 'l_feat_17']  # l_feat_1, l_feat_9와 중복
-        self.statistical_insignificant_features = ['l_feat_24']  # 낮은 분산 + 낮은 상관관계
 
-        # feat_a 그룹 무조건 제거 (94.4%가 통계적으로 문제)
-        self.remove_feat_a_group = True
+        self.constant_features_to_remove = ['l_feat_20', 'l_feat_23']
+        self.duplicate_features_to_remove = ['l_feat_16', 'l_feat_17']
+        self.statistical_insignificant_features = ['l_feat_24']
+        self.low_importance_features = ['day_of_week']
+        self.remove_feat_a_group = False
+
+        if 'day_of_week' in self.categorical_features:
+            self.categorical_features.remove('day_of_week')
 
     def fit_transform(self, df):
-        """트리 모델에 최적화된 피처 전처리 + EDA 기반 새 피처들"""
         print("🚀 Processing features with EDA-based enhancements...")
-
-        # EDA 피처 생성을 기본 전처리 전에 수행 (clicked 컬럼이 있을 때)
         df = self._create_eda_features(df.copy(), is_training=True)
-
-        # 기본 전처리 수행 (clicked 컬럼 제거)
         df = super().fit_transform(df)
-
-        # 상수 피처 제거
         df = self._remove_constant_features(df)
-
         return df
 
     def transform(self, df):
-        """테스트 데이터 변환 (기존 매핑 테이블 사용)"""
         print("🔄 Transforming test data with EDA features...")
-
-        # 기본 변환 먼저 수행
         df = super().transform(df)
-
-        # 새로운 피처들 생성 (학습된 매핑 사용)
         df = self._create_eda_features(df, is_training=False)
-
-        # 상수 피처 제거
         df = self._remove_constant_features(df)
-
         return df
 
     def _remove_constant_features(self, df):
-        """상수 피처 및 중복 피처들 제거"""
         removed_features = []
 
-        # 상수 피처 제거
-        for feat in self.constant_features_to_remove:
+        all_features_to_remove = (
+            self.constant_features_to_remove +
+            self.duplicate_features_to_remove +
+            self.statistical_insignificant_features +
+            self.low_importance_features
+        )
+
+        for feat in all_features_to_remove:
             if feat in df.columns:
                 df = df.drop(columns=[feat])
                 removed_features.append(feat)
 
-        # 중복 피처 제거
-        for feat in self.duplicate_features_to_remove:
-            if feat in df.columns:
-                df = df.drop(columns=[feat])
-                removed_features.append(feat)
-
-        # 통계적 무의미 피처 제거
-        for feat in self.statistical_insignificant_features:
-            if feat in df.columns:
-                df = df.drop(columns=[feat])
-                removed_features.append(feat)
-
-        # feat_a 그룹 제거 (옵션)
         if self.remove_feat_a_group:
             feat_a_features = [col for col in df.columns if col.startswith('feat_a_')]
-            for feat in feat_a_features:
-                df = df.drop(columns=[feat])
-                removed_features.append(feat)
-
+            df = df.drop(columns=feat_a_features)
+            removed_features.extend(feat_a_features)
             if feat_a_features:
                 print(f"🗑️ Removed feat_a group: {len(feat_a_features)} features")
 
         if removed_features:
             print(f"🗑️ Removed features: {removed_features}")
-
         return df
 
     def _create_eda_features(self, df, is_training=True):
-        """EDA에서 발견한 인사이트 기반 새 피처들 생성"""
         print(f"📊 Creating EDA-based features (training={is_training})...")
 
-        # 필요한 컬럼들 확인
         has_gender = 'gender' in df.columns
         has_age_group = 'age_group' in df.columns
         has_inventory = 'inventory_id' in df.columns
         has_hour = 'hour' in df.columns
-        has_day = 'day_of_week' in df.columns
         has_clicked = 'clicked' in df.columns
 
         new_feature_count = 0
-        new_columns = {}  # DataFrame fragmentation 방지를 위한 딕셔너리
+        new_columns = {}
 
-        # 1. 사용자 세그먼트 CTR (최고 임팩트 0.0536)
-        if has_gender and has_age_group:
-            if is_training and has_clicked:
-                print("  📈 Computing user segment CTR...")
-                print(f"     Data shape: {df.shape}, clicked column exists: {has_clicked}")
-                print(f"     Overall CTR: {df['clicked'].mean():.6f}")
-
-                self.user_segment_ctr = df.groupby(['gender', 'age_group'])['clicked'].mean().to_dict()
-                print(f"     Created {len(self.user_segment_ctr)} user segment mappings")
-
-                # 샘플 출력
-                sample_ctrs = list(self.user_segment_ctr.values())[:5]
-                print(f"     Sample CTRs: {sample_ctrs}")
-            else:
-                print(f"  ⚠️ Skipping CTR computation: is_training={is_training}, has_clicked={has_clicked}")
-
-            # 매핑 적용 (벡터화된 방법)
-            if len(self.user_segment_ctr) > 0:
-                # 임시 DataFrame을 만들어 merge 사용
-                segment_df = pd.DataFrame(list(self.user_segment_ctr.keys()),
-                                         columns=['gender', 'age_group'])
-                segment_df['user_segment_ctr'] = list(self.user_segment_ctr.values())
-
-                # 타입 일치시키기
-                test_df = df[['gender', 'age_group']].copy()
-                test_df['gender'] = test_df['gender'].astype(str)
-                test_df['age_group'] = test_df['age_group'].astype(str)
-                segment_df['gender'] = segment_df['gender'].astype(str)
-                segment_df['age_group'] = segment_df['age_group'].astype(str)
-
-                merged = test_df.merge(
-                    segment_df, on=['gender', 'age_group'], how='left'
-                )
-                new_columns['user_segment_ctr'] = merged['user_segment_ctr'].fillna(0.019).astype(np.float32)
-            else:
-                # 매핑 테이블이 없으면 기본값 사용
-                new_columns['user_segment_ctr'] = np.full(len(df), 0.019, dtype=np.float32)
-            new_feature_count += 1
-            print(f"     ✅ user_segment_ctr: mean={new_columns['user_segment_ctr'].mean():.6f}")
-
-        # 2. 상품별 평균 CTR (0.0523 차이)
         if has_inventory:
             if is_training and has_clicked:
-                print("  🏪 Computing inventory CTR...")
-                self.inventory_ctr = df.groupby('inventory_id')['clicked'].mean().to_dict()
-                print(f"     Created {len(self.inventory_ctr)} inventory CTR mappings")
-
-                # 상품 인기도 (노출 횟수)
+                print("  🏪 Computing inventory popularity (count-based, no leakage)...")
                 inventory_counts = df.groupby('inventory_id').size()
                 self.inventory_popularity = inventory_counts.rank(ascending=False).to_dict()
                 print(f"     Created {len(self.inventory_popularity)} inventory popularity ranks")
 
-            # 매핑 적용
-            new_columns['inventory_ctr'] = df['inventory_id'].map(self.inventory_ctr).fillna(0.019).astype(np.float32)
             new_columns['inventory_popularity_rank'] = df['inventory_id'].map(self.inventory_popularity).fillna(len(self.inventory_popularity)/2).astype(np.float32)
-            new_feature_count += 2
-            print(f"     ✅ inventory_ctr: mean={new_columns['inventory_ctr'].mean():.6f}")
+            new_feature_count += 1
             print(f"     ✅ inventory_popularity_rank: mean={new_columns['inventory_popularity_rank'].mean():.1f}")
 
-        # 3. 시간대별 CTR (제거됨 - 중요도 낮음)
-        # hour_ctr (rank 83), is_peak_hour (rank 77) 제거됨
 
-        # 4. 요일별 CTR (제거됨 - 중요도 낮음)
-        # day_ctr (rank 56), is_weekend (rank 102) 제거됨
-
-        # 5. 시간×요일 교차 CTR (유지 - 32위 중요도)
-        if has_hour and has_day:
-            if is_training and has_clicked:
-                print("  🕐📅 Computing hour×day CTR...")
-                self.hour_day_ctr = df.groupby(['hour', 'day_of_week'])['clicked'].mean().to_dict()
-                print(f"     Created {len(self.hour_day_ctr)} hour×day CTR mappings")
-
-            # 매핑 적용 (벡터화된 방법)
-            hour_day_df = pd.DataFrame(list(self.hour_day_ctr.keys()),
-                                      columns=['hour', 'day_of_week'])
-            hour_day_df['hour_day_ctr'] = list(self.hour_day_ctr.values())
-
-            # 타입 일치시키기
-            test_hd_df = df[['hour', 'day_of_week']].copy()
-            test_hd_df['hour'] = test_hd_df['hour'].astype(str)
-            test_hd_df['day_of_week'] = test_hd_df['day_of_week'].astype(str)
-            hour_day_df['hour'] = hour_day_df['hour'].astype(str)
-            hour_day_df['day_of_week'] = hour_day_df['day_of_week'].astype(str)
-
-            merged = test_hd_df.merge(
-                hour_day_df, on=['hour', 'day_of_week'], how='left'
-            )
-            new_columns['hour_day_ctr'] = merged['hour_day_ctr'].fillna(0.019).astype(np.float32)
+        if has_gender and has_age_group:
+            gender_age_combo = df['gender'].astype(str) + '_' + df['age_group'].astype(str)
+            le_combo = LabelEncoder()
+            new_columns['gender_age_combo'] = le_combo.fit_transform(gender_age_combo).astype(np.float32)
             new_feature_count += 1
-            print(f"     ✅ hour_day_ctr: mean={new_columns['hour_day_ctr'].mean():.6f}")
 
-        # 6. 상품 CTR 분위수 (고급 피처)
-        if has_inventory and 'inventory_ctr' in new_columns:
-            try:
-                # 유니크한 값들이 충분한지 확인
-                unique_values = new_columns['inventory_ctr'].nunique()
-                if unique_values >= 10:
-                    new_columns['inventory_ctr_quantile'] = pd.qcut(
-                        new_columns['inventory_ctr'],
-                        q=10,
-                        labels=range(10),
-                        duplicates='drop'
-                    ).astype('category').cat.codes.astype(np.int8)
-                    new_feature_count += 1
-                    print(f"     ✅ inventory_ctr_quantile: 10 quantiles from {unique_values} unique values")
-                else:
-                    # 유니크 값이 적으면 rank 기반으로 변환
-                    new_columns['inventory_ctr_quantile'] = (new_columns['inventory_ctr'].rank(method='first') / len(df) * 10).astype(np.int8)
-                    new_columns['inventory_ctr_quantile'] = np.clip(new_columns['inventory_ctr_quantile'], 0, 9)
-                    new_feature_count += 1
-                    print(f"     ✅ inventory_ctr_quantile: rank-based quantiles ({unique_values} unique values)")
-            except (ValueError, TypeError) as e:
-                # qcut 실패시 rank 기반으로 대체
-                print(f"     ⚠️ qcut failed, using rank-based quantiles: {e}")
-                new_columns['inventory_ctr_quantile'] = (new_columns['inventory_ctr'].rank(method='first') / len(df) * 10).astype(np.int8)
-                new_columns['inventory_ctr_quantile'] = np.clip(new_columns['inventory_ctr_quantile'], 0, 9)
-                new_feature_count += 1
-                print(f"     ✅ inventory_ctr_quantile: rank-based quantiles")
+        if has_age_group and has_inventory:
+            if is_training:
+                age_inventory_counts = df.groupby(['age_group', 'inventory_id']).size()
+                self.age_inventory_affinity = age_inventory_counts.groupby('age_group').rank(ascending=False).to_dict()
 
-        # 새 컬럼들을 한 번에 DataFrame에 추가 (fragmentation 방지)
+            age_inventory_key = list(zip(df['age_group'], df['inventory_id']))
+            new_columns['age_inventory_affinity'] = pd.Series(age_inventory_key).map(
+                self.age_inventory_affinity).fillna(len(df['inventory_id'].unique())/2).astype(np.float32)
+            new_feature_count += 1
+
+        if has_gender and has_inventory:
+            if is_training:
+                gender_inventory_counts = df.groupby(['gender', 'inventory_id']).size()
+                self.gender_inventory_affinity = gender_inventory_counts.groupby('gender').rank(ascending=False).to_dict()
+
+            gender_inventory_key = list(zip(df['gender'], df['inventory_id']))
+            new_columns['gender_inventory_affinity'] = pd.Series(gender_inventory_key).map(
+                self.gender_inventory_affinity).fillna(len(df['inventory_id'].unique())/2).astype(np.float32)
+            new_feature_count += 1
+
+
         if new_columns:
-            new_df = pd.concat([df, pd.DataFrame(new_columns)], axis=1)
-            df = new_df
+            df = pd.concat([df, pd.DataFrame(new_columns)], axis=1)
 
-        # 새 피처들을 numerical_features에 추가 (중요도 낮은 시간 피처 제거)
         new_features = [
-            'user_segment_ctr', 'inventory_ctr', 'inventory_popularity_rank',
-            'hour_day_ctr', 'inventory_ctr_quantile'
-            # 제거된 저중요도 시간 피처들: hour_ctr, is_peak_hour, day_ctr, is_weekend
+            'inventory_popularity_rank',
+            'gender_age_combo',
+            'age_inventory_affinity',
+            'gender_inventory_affinity'
         ]
 
-        # 실제로 생성된 피처들만 추가
         for feat in new_features:
             if feat in df.columns and feat not in self.numerical_features:
                 self.numerical_features.append(feat)
@@ -253,20 +134,17 @@ class EnhancedTreeFeatureProcessor(TreeBasedFeatureProcessor):
 
         print(f"🎉 Created {new_feature_count} new EDA-based features!")
         print(f"📊 New features: {[f for f in new_features if f in df.columns]}")
-
         return df
 
     def get_feature_importance_groups(self):
-        """피처들을 그룹별로 분류하여 중요도 분석용"""
         return {
             'original_categorical': [f for f in self.categorical_features],
             'original_numerical': [f for f in self.numerical_features if f not in self.new_features],
-            'eda_user_features': ['user_segment_ctr'],
-            'eda_inventory_features': ['inventory_ctr', 'inventory_popularity_rank', 'inventory_ctr_quantile'],
-            'eda_temporal_features': ['hour_day_ctr'],
+            'eda_user_features': [],
+            'eda_inventory_features': ['inventory_popularity_rank', 'age_inventory_affinity', 'gender_inventory_affinity'],
+            'eda_user_features': ['gender_age_combo'],
             'all_new_features': self.new_features
         }
 
     def transform_test(self, df):
-        """테스트 데이터 전용 변환 메서드 (transform과 동일하지만 명시적)"""
         return self.transform(df)
