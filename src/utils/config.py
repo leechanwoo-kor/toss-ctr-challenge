@@ -67,11 +67,11 @@ XGBOOST_CONFIG = {
     "tree_method": "hist",               # 히스토그램 방식
     "max_depth": 8,                      # 기존 최고 성능값
     "learning_rate": 0.1,                # 기존 최고 성능값
-    "n_estimators": 120,                 # 기존 최고 성능값
+    "n_estimators": 200,                 # 기존 최고 성능값
     "subsample": 0.9,                    # 기존 최고 성능값
     "colsample_bytree": 0.9,             # 기존 최고 성능값
     "colsample_bylevel": 0.9,            # 기존 최고 성능값
-    "min_child_weight": 1,               # 기존 최고 성능값
+    "min_child_weight": 100,             # 기존 최고 성능값
     "reg_alpha": 0.1,                    # 기존 최고 성능값
     "reg_lambda": 0.1,                   # 기존 최고 성능값
     "scale_pos_weight": 51.6,            # 클래스 불균형 (98.1/1.9)

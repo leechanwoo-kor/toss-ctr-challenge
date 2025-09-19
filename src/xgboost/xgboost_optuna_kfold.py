@@ -75,14 +75,14 @@ def objective(trial):
         "device": "cuda:0",
         "tree_method": "hist",
 
-        # 🎯 현재 최고 성능(120 iter, max_depth=8) 주변 정밀 탐색
+        # 🎯 현재 최고 성능(200 iter, max_depth=8, min_child_weight=100) 주변 정밀 탐색
         "max_depth": trial.suggest_int("max_depth", 6, 10),                    # 6-10으로 확장
         "learning_rate": trial.suggest_float("learning_rate", 0.08, 0.15),     # 0.1 주변
-        "n_estimators": trial.suggest_int("n_estimators", 80, 200, step=20),   # 80-200으로 현실적
+        "n_estimators": trial.suggest_int("n_estimators", 150, 250, step=25),  # 200 주변으로 조정
         "subsample": trial.suggest_float("subsample", 0.85, 0.95),             # 0.9 주변
         "colsample_bytree": trial.suggest_float("colsample_bytree", 0.85, 0.95), # 0.9 주변
         "colsample_bylevel": trial.suggest_float("colsample_bylevel", 0.85, 0.95), # 0.9 주변
-        "min_child_weight": trial.suggest_int("min_child_weight", 1, 5),        # 1-5로 현실적
+        "min_child_weight": trial.suggest_int("min_child_weight", 50, 150),     # 100 주변으로 조정
         "reg_alpha": trial.suggest_float("reg_alpha", 0.05, 0.2),              # 0.1 주변
         "reg_lambda": trial.suggest_float("reg_lambda", 0.05, 0.2),            # 0.1 주변
 
@@ -225,7 +225,7 @@ def main():
     # 최적화 실행 - 현재 최고 성능 주변 정밀 탐색
     n_trials = 50  # 정밀 탐색으로 최적해 발견
     print(f"🚀 Starting optimization with {n_trials} trials...")
-    print(f"🎯 Strategy: Fine-tuning around current best performance (120 iter, max_depth=8)")
+    print(f"🎯 Strategy: Fine-tuning around current best performance (200 iter, max_depth=8, min_child_weight=100)")
 
     try:
         study.optimize(objective, n_trials=n_trials, timeout=3600*4)  # 4시간 제한
