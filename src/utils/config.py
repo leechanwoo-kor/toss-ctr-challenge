@@ -58,27 +58,27 @@ LIGHTGBM_WANDB_CONFIG = {
     "NOTES": "LightGBM with industry standard hyperparams for CTR prediction",
 }
 
-# XGBoost 기존 최고 성능 설정 (0.3477 달성 - 9/17 16:57)
+# XGBoost Optuna 최적화 설정 (0.355368 달성 - 9/19 Optuna 50 trials)
 XGBOOST_CONFIG = {
     "objective": "binary:logistic",
     "eval_metric": "auc",
     "booster": "gbtree",
     "device": "cuda:0",                  # GPU 가속
     "tree_method": "hist",               # 히스토그램 방식
-    "max_depth": 8,                      # 기존 최고 성능값
-    "learning_rate": 0.1,                # 기존 최고 성능값
-    "n_estimators": 200,                 # 기존 최고 성능값
-    "subsample": 0.9,                    # 기존 최고 성능값
-    "colsample_bytree": 0.9,             # 기존 최고 성능값
-    "colsample_bylevel": 0.9,            # 기존 최고 성능값
-    "min_child_weight": 100,             # 기존 최고 성능값
-    "reg_alpha": 0.1,                    # 기존 최고 성능값
-    "reg_lambda": 0.1,                   # 기존 최고 성능값
+    "max_depth": 8,                      # Optuna 최적값
+    "learning_rate": 0.08528321105586273, # Optuna 최적값 (0.1→0.085)
+    "n_estimators": 225,                 # Optuna 최적값 (200→225)
+    "subsample": 0.935827259483019,      # Optuna 최적값 (0.9→0.936)
+    "colsample_bytree": 0.8730924809775612, # Optuna 최적값 (0.9→0.873)
+    "colsample_bylevel": 0.8598365311238199, # Optuna 최적값 (0.9→0.860)
+    "min_child_weight": 113,             # Optuna 최적값 (100→113)
+    "reg_alpha": 0.19042170254858717,    # Optuna 최적값 (0.1→0.190)
+    "reg_lambda": 0.06783887727961516,   # Optuna 최적값 (0.1→0.068)
     "scale_pos_weight": 51.6,            # 클래스 불균형 (98.1/1.9)
     "random_state": 42,
     "n_jobs": -1,
     "verbosity": 0,
-    "early_stopping_rounds": 10,
+    "early_stopping_rounds": 30,
 }
 
 # K-Fold Cross Validation 설정
