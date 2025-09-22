@@ -16,13 +16,13 @@
 DEEPFM_CONFIG = {
     "SAMPLE_SIZE": None,  # 전체 데이터 사용 (10.7M)
     "BATCH_SIZE": 1024,  # 현업 표준 (더 큰 배치)
-    "EPOCHS": 10,
-    "LEARNING_RATE": 0.001,  # 현업 표준 (빠른 수렴)
-    "EMBEDDING_DIM": 32,  # 현업 표준 (더 큰 임베딩)
-    "HIDDEN_DIMS": [1024, 512, 256],  # 현업 표준 (더 큰 용량)
+    "EPOCHS": 15,  # 더 많은 에포크로 개선 시도 (10→15)
+    "LEARNING_RATE": 0.001,  # 원래대로 복원 (0.003→0.001)
+    "EMBEDDING_DIM": 16,  # 최적화: 가벼운 임베딩 (32→16)
+    "HIDDEN_DIMS": [256, 128],  # 최적화: 가벼운 네트워크 ([1024,512,256]→[256,128])
     "DROPOUT": 0.2,  # 현업 표준 (낮은 드롭아웃)
     "WEIGHT_DECAY": 1e-5,  # 현업 표준
-    "POS_WEIGHT": 51.6,  # 클래스 불균형 대응 (98.1/1.9)
+    "POS_WEIGHT": 51.6,  # 원래대로 복원 (5.0→51.6)
     "FOCAL_ALPHA": 0.25,  # Focal Loss alpha parameter
     "FOCAL_GAMMA": 2.0,  # Focal Loss gamma parameter
     "SEED": 42,
