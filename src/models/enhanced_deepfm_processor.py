@@ -29,14 +29,14 @@ class EnhancedDeepFMFeatureProcessor(TrainingFeatureProcessor):
         self.user_item_stats = {}
         self.temporal_stats = {}
 
-        # 임베딩 최적화를 위한 범주형 피처 조합
-        self.categorical_combinations = [
-            ('gender', 'age_group'),
-            ('age_group', 'inventory_id'),
-            ('gender', 'inventory_id'),
-            ('hour', 'gender'),
-            ('hour', 'age_group')
-        ]
+        # 임베딩 최적화를 위한 범주형 피처 조합 (제거됨)
+        # self.categorical_combinations = [
+        #     ('gender', 'age_group'),
+        #     ('age_group', 'inventory_id'),
+        #     ('gender', 'inventory_id'),
+        #     ('hour', 'gender'),
+        #     ('hour', 'age_group')
+        # ]
 
         # 딥러닝에 불리한 노이즈 피처들 (XGB 분석 기반)
         self.noise_features_to_remove = [
@@ -61,8 +61,8 @@ class EnhancedDeepFMFeatureProcessor(TrainingFeatureProcessor):
         # 2. DeepFM 특화 피처 생성
         df = self._create_deepfm_features(df, is_training=True)
 
-        # 3. 임베딩 친화적 피처 조합 생성
-        df = self._create_embedding_combinations(df, is_training=True)
+        # 3. 임베딩 친화적 피처 조합 생성 (제거: 불필요한 복잡성)
+        # df = self._create_embedding_combinations(df, is_training=True)
 
         # 4. 노이즈 피처 제거
         df = self._remove_noise_features(df)
@@ -77,11 +77,69 @@ class EnhancedDeepFMFeatureProcessor(TrainingFeatureProcessor):
         """테스트 데이터에 대한 피처 변환"""
         print("🔄 Transforming test data with DeepFM features...")
 
-        df = super().transform(df)
+        # 1. 기본 전처리 (스케일링 제외)
+        df = self._apply_basic_preprocessing(df)
+
+        # 2. 모든 피처 생성 (조합 피처 제거로 속도 개선)
         df = self._create_deepfm_features(df, is_training=False)
-        df = self._create_embedding_combinations(df, is_training=False)
+        # df = self._create_embedding_combinations(df, is_training=False)  # 제거: 불필요한 복잡성
         df = self._remove_noise_features(df)
+
+        # 3. 마지막에 스케일링 적용
+        df = self._apply_final_scaling(df)
         df = self._optimize_for_deep_learning(df, is_training=False)
+
+        return df
+
+    def _apply_basic_preprocessing(self, df):
+        """기본 전처리 (스케일링 제외)"""
+        # 범주형 피처 인코딩
+        for col in self.categorical_features:
+            if col in df.columns:
+                df[col] = df[col].fillna('unknown').astype(str)
+                if col in self.categorical_encoders:
+                    # 훈련 중 보지 못한 값들을 'unknown'으로 처리
+                    unknown_mask = ~df[col].isin(self.categorical_encoders[col].classes_)
+                    df.loc[unknown_mask, col] = 'unknown'
+
+                    # unknown이 인코더에 없으면 추가
+                    if 'unknown' not in self.categorical_encoders[col].classes_:
+                        # 새로운 클래스를 추가할 수 없으므로 0으로 매핑
+                        df[col] = df[col].apply(lambda x: x if x in self.categorical_encoders[col].classes_ else self.categorical_encoders[col].classes_[0])
+
+                    df[col] = self.categorical_encoders[col].transform(df[col])
+
+        # 수치형 피처 전처리 (스케일링 제외)
+        for col in self.numerical_features:
+            if col in df.columns:
+                df = self._apply_numerical_preprocessing_step(df, col, is_training=False)
+
+        return df
+
+    def _apply_final_scaling(self, df):
+        """최종 스케일링 적용"""
+        if hasattr(self, 'scaler') and self.scaler is not None:
+            # 스케일러가 훈련된 피처들 확인
+            scaler_features = getattr(self.scaler, 'feature_names_in_', None)
+            if scaler_features is not None:
+                # 훈련 시 사용된 피처만 선택
+                available_features = [col for col in scaler_features if col in df.columns]
+                missing_features = [col for col in scaler_features if col not in df.columns]
+
+                if missing_features:
+                    print(f"  ⚠️ Missing features for scaling: {len(missing_features)} features")
+                    # 누락된 피처들을 0으로 채움
+                    for col in missing_features:
+                        df[col] = 0.0
+
+                # 훈련 시와 동일한 순서로 피처 정렬
+                scaler_input = df[scaler_features]
+                df[scaler_features] = self.scaler.transform(scaler_input)
+            else:
+                # feature_names_in_이 없는 경우 기존 방식 사용
+                numerical_cols = [col for col in self.numerical_features if col in df.columns]
+                if numerical_cols:
+                    df[numerical_cols] = self.scaler.transform(df[numerical_cols])
 
         return df
 
@@ -262,15 +320,38 @@ class EnhancedDeepFMFeatureProcessor(TrainingFeatureProcessor):
                 df[numerical_cols] = self.deep_scaler.fit_transform(df[numerical_cols])
 
         elif numerical_cols and hasattr(self, 'deep_scaler'):
-            # 테스트/검증 데이터도 배치 처리
-            if len(df) > 1000000:
-                batch_size = 100000
-                for i in range(0, len(df), batch_size):
-                    end_idx = min(i + batch_size, len(df))
-                    batch_data = df[numerical_cols].iloc[i:end_idx]
-                    df.loc[df.index[i:end_idx], numerical_cols] = self.deep_scaler.transform(batch_data)
+            # 테스트/검증 데이터 변환 시 피처 매칭 확인
+            scaler_features = getattr(self.deep_scaler, 'feature_names_in_', None)
+            if scaler_features is not None:
+                # 훈련 시 사용된 피처만 선택
+                available_features = [col for col in scaler_features if col in df.columns]
+                missing_features = [col for col in scaler_features if col not in df.columns]
+
+                if missing_features:
+                    print(f"  ⚠️ Missing features for deep scaling: {len(missing_features)} features")
+                    # 누락된 피처들을 0으로 채움
+                    for col in missing_features:
+                        df[col] = 0.0
+
+                # 배치 처리
+                if len(df) > 1000000:
+                    batch_size = 100000
+                    for i in range(0, len(df), batch_size):
+                        end_idx = min(i + batch_size, len(df))
+                        batch_data = df[scaler_features].iloc[i:end_idx]
+                        df.loc[df.index[i:end_idx], scaler_features] = self.deep_scaler.transform(batch_data)
+                else:
+                    df[scaler_features] = self.deep_scaler.transform(df[scaler_features])
             else:
-                df[numerical_cols] = self.deep_scaler.transform(df[numerical_cols])
+                # 기존 방식 (feature_names_in_이 없는 경우)
+                if len(df) > 1000000:
+                    batch_size = 100000
+                    for i in range(0, len(df), batch_size):
+                        end_idx = min(i + batch_size, len(df))
+                        batch_data = df[numerical_cols].iloc[i:end_idx]
+                        df.loc[df.index[i:end_idx], numerical_cols] = self.deep_scaler.transform(batch_data)
+                else:
+                    df[numerical_cols] = self.deep_scaler.transform(df[numerical_cols])
 
         # 범주형 피처들의 임베딩 차원 힌트 계산
         if is_training:
