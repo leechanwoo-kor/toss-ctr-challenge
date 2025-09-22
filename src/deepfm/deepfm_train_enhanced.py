@@ -85,7 +85,8 @@ def temperature_scaling(logits, labels):
 
     for temp in temperatures:
         scaled_probs = torch.sigmoid(logits / temp).cpu().numpy()
-        score = calculate_competition_metrics(labels, scaled_probs)
+        metrics = calculate_competition_metrics(labels, scaled_probs)
+        score = metrics['comp_score']
 
         if score > best_score:
             best_score = score
@@ -211,11 +212,11 @@ def main():
         print(f"   Optimized embedding dimension: {model_config['EMBED_DIM']}")
 
     model = DeepFM(
-        categorical_feature_dims=metadata['categorical_feature_dims'],
-        numerical_feature_count=len(metadata['numerical_features']),
-        embed_dim=model_config['EMBED_DIM'],
-        hidden_dims=model_config['HIDDEN_DIMS'],
-        dropout_rate=model_config['DROPOUT']
+        feature_dims=metadata['categorical_feature_dims'],
+        embedding_dim=model_config['EMBED_DIM'],
+        hidden_units=model_config['HIDDEN_DIMS'],
+        dropout=model_config['DROPOUT'],
+        num_numerical=len(metadata['numerical_features'])
     ).to(device)
 
     total_params = sum(p.numel() for p in model.parameters())
@@ -242,7 +243,7 @@ def main():
     )
 
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='max', patience=2, factor=0.5, verbose=True
+        optimizer, mode='max', patience=2, factor=0.5
     )
 
     # 6. 훈련
@@ -261,12 +262,13 @@ def main():
         train_steps = 0
 
         train_pbar = tqdm(train_loader, desc="Training")
-        for batch_idx, (features, targets) in enumerate(train_pbar):
-            features = {k: v.to(device) for k, v in features.items()}
+        for batch_idx, (categorical_features, numerical_features, targets) in enumerate(train_pbar):
+            categorical_features = {k: v.to(device) for k, v in categorical_features.items()}
+            numerical_features = numerical_features.to(device)
             targets = targets.to(device).float()
 
             optimizer.zero_grad()
-            outputs = model(features).squeeze()
+            outputs = model(categorical_features, numerical_features).squeeze()
             loss = criterion(outputs, targets)
             loss.backward()
 
@@ -292,11 +294,12 @@ def main():
 
         with torch.no_grad():
             val_pbar = tqdm(val_loader, desc="Validation")
-            for features, targets in val_pbar:
-                features = {k: v.to(device) for k, v in features.items()}
+            for categorical_features, numerical_features, targets in val_pbar:
+                categorical_features = {k: v.to(device) for k, v in categorical_features.items()}
+                numerical_features = numerical_features.to(device)
                 targets = targets.to(device).float()
 
-                outputs = model(features).squeeze()
+                outputs = model(categorical_features, numerical_features).squeeze()
                 loss = criterion(outputs, targets)
 
                 val_loss += loss.item()
@@ -318,7 +321,8 @@ def main():
 
         # 메트릭 계산
         probabilities = torch.sigmoid(all_outputs / optimal_temp).numpy()
-        competition_score = calculate_competition_metrics(all_targets.numpy(), probabilities)
+        metrics = calculate_competition_metrics(all_targets.numpy(), probabilities)
+        competition_score = metrics['comp_score']
 
         # AUC 계산
         from sklearn.metrics import roc_auc_score, average_precision_score

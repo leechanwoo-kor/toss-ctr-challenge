@@ -9,7 +9,8 @@ from tqdm import tqdm
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from collections import defaultdict
 
-from ..utils.config import CATEGORICAL_FEATURES, EXCLUDE_COLUMNS
+from ..config import CATEGORICAL_FEATURES
+from ..utils.config import EXCLUDE_COLUMNS
 from .feature_processor import TrainingFeatureProcessor
 
 
@@ -236,11 +237,40 @@ class EnhancedDeepFMFeatureProcessor(TrainingFeatureProcessor):
         numerical_cols = [col for col in self.numerical_features if col in df.columns]
 
         if numerical_cols and is_training:
-            # StandardScaler로 정규화 (DeepFM에서 더 안정적)
+            # StandardScaler로 정규화 (메모리 효율적인 배치 처리)
             self.deep_scaler = StandardScaler()
-            df[numerical_cols] = self.deep_scaler.fit_transform(df[numerical_cols])
+
+            # 대용량 데이터의 경우 배치 처리로 메모리 절약
+            if len(df) > 1000000:  # 100만개 이상이면 배치 처리
+                print(f"   🔄 Processing {len(df):,} samples in batches to save memory...")
+                batch_size = 100000
+
+                # 첫 번째 배치로 scaler fit
+                first_batch = df[numerical_cols].iloc[:batch_size]
+                self.deep_scaler.fit(first_batch)
+
+                # 모든 배치를 변환
+                for i in range(0, len(df), batch_size):
+                    end_idx = min(i + batch_size, len(df))
+                    batch_data = df[numerical_cols].iloc[i:end_idx]
+                    df.loc[df.index[i:end_idx], numerical_cols] = self.deep_scaler.transform(batch_data)
+
+                    if i % (batch_size * 10) == 0:  # 매 10 배치마다 진행 상황 출력
+                        progress = (end_idx / len(df)) * 100
+                        print(f"     📊 Batch processing: {progress:.1f}% ({end_idx:,}/{len(df):,})")
+            else:
+                df[numerical_cols] = self.deep_scaler.fit_transform(df[numerical_cols])
+
         elif numerical_cols and hasattr(self, 'deep_scaler'):
-            df[numerical_cols] = self.deep_scaler.transform(df[numerical_cols])
+            # 테스트/검증 데이터도 배치 처리
+            if len(df) > 1000000:
+                batch_size = 100000
+                for i in range(0, len(df), batch_size):
+                    end_idx = min(i + batch_size, len(df))
+                    batch_data = df[numerical_cols].iloc[i:end_idx]
+                    df.loc[df.index[i:end_idx], numerical_cols] = self.deep_scaler.transform(batch_data)
+            else:
+                df[numerical_cols] = self.deep_scaler.transform(df[numerical_cols])
 
         # 범주형 피처들의 임베딩 차원 힌트 계산
         if is_training:

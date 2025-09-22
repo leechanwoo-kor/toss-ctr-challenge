@@ -7,7 +7,8 @@ import numpy as np
 from tqdm import tqdm
 from sklearn.preprocessing import LabelEncoder, QuantileTransformer
 
-from ..utils.config import CATEGORICAL_FEATURES, EXCLUDE_COLUMNS
+from ..config import CATEGORICAL_FEATURES
+from ..utils.config import EXCLUDE_COLUMNS
 
 
 class BaseFeatureProcessor:

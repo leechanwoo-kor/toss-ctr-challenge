@@ -1,5 +1,15 @@
 """
-DeepFM 설정 관리
+모델별 하이퍼파라미터 설정 - Toss CTR Challenge
+각 모델(DeepFM, XGBoost, LightGBM, CatBoost)의 하이퍼파라미터 및 실험 설정 관리
+
+역할:
+- 모델별 하이퍼파라미터 (DeepFM, XGBoost, LightGBM, CatBoost)
+- WandB 설정
+- Optuna 최적화 설정
+- K-Fold 교차검증 설정
+- 제외할 컬럼 정의 (EXCLUDE_COLUMNS)
+
+기본 프로젝트 설정은 src/config.py 참조
 """
 
 # DeepFM 현업 표준 설정 (Google/Meta/ByteDance 기준)
@@ -9,11 +19,15 @@ DEEPFM_CONFIG = {
     "EPOCHS": 10,
     "LEARNING_RATE": 0.001,  # 현업 표준 (빠른 수렴)
     "EMBEDDING_DIM": 32,  # 현업 표준 (더 큰 임베딩)
-    "HIDDEN_UNITS": [1024, 512, 256],  # 현업 표준 (더 큰 용량)
+    "HIDDEN_DIMS": [1024, 512, 256],  # 현업 표준 (더 큰 용량)
     "DROPOUT": 0.2,  # 현업 표준 (낮은 드롭아웃)
     "WEIGHT_DECAY": 1e-5,  # 현업 표준
+    "POS_WEIGHT": 51.6,  # 클래스 불균형 대응 (98.1/1.9)
+    "FOCAL_ALPHA": 0.25,  # Focal Loss alpha parameter
+    "FOCAL_GAMMA": 2.0,  # Focal Loss gamma parameter
     "SEED": 42,
     "EARLY_STOPPING": 5,
+    "PATIENCE": 3,  # Early stopping patience
 }
 
 # WandB 설정
@@ -78,7 +92,7 @@ XGBOOST_CONFIG = {
     "random_state": 42,
     "n_jobs": -1,
     "verbosity": 0,
-    "early_stopping_rounds": 30,
+    "early_stopping_rounds": 20,
 }
 
 # CatBoost 현업 표준 설정 (CTR 최적화)
@@ -143,8 +157,8 @@ XGBOOST_OPTUNA_CONFIG = {
     "N_WARMUP_STEPS": 100,
 }
 
-# 카테고리 피처 정의
-CATEGORICAL_FEATURES = ["gender", "age_group", "inventory_id", "day_of_week", "hour"]
+# 카테고리 피처 정의 (메인 config에서 import)
+# CATEGORICAL_FEATURES는 src.config에서 정의됨 - 중복 제거를 위해 삭제
 
 # 제외할 컬럼
 EXCLUDE_COLUMNS = {"clicked", "seq", "ID"}

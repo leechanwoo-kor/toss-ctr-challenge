@@ -4,7 +4,8 @@ import numpy as np
 from tqdm import tqdm
 from sklearn.preprocessing import LabelEncoder
 
-from ..utils.config import CATEGORICAL_FEATURES, EXCLUDE_COLUMNS
+from ..config import CATEGORICAL_FEATURES
+from ..utils.config import EXCLUDE_COLUMNS
 from .feature_processor import TreeBasedFeatureProcessor
 
 
@@ -34,7 +35,7 @@ class EnhancedTreeFeatureProcessor(TreeBasedFeatureProcessor):
         return df
 
     def transform(self, df):
-        print("🔄 Transforming test data with EDA features...")
+        print("[INFO] Transforming test data with EDA features...")
         df = super().transform(df)
         df = self._create_eda_features(df, is_training=False)
         df = self._remove_constant_features(df)
@@ -60,14 +61,14 @@ class EnhancedTreeFeatureProcessor(TreeBasedFeatureProcessor):
             df = df.drop(columns=feat_a_features)
             removed_features.extend(feat_a_features)
             if feat_a_features:
-                print(f"🗑️ Removed feat_a group: {len(feat_a_features)} features")
+                print(f"[INFO] Removed feat_a group: {len(feat_a_features)} features")
 
         if removed_features:
-            print(f"🗑️ Removed features: {removed_features}")
+            print(f"[INFO] Removed features: {removed_features}")
         return df
 
     def _create_eda_features(self, df, is_training=True):
-        print(f"📊 Creating EDA-based features (training={is_training})...")
+        print(f"[INFO] Creating EDA-based features (training={is_training})...")
 
         has_gender = 'gender' in df.columns
         has_age_group = 'age_group' in df.columns
@@ -87,7 +88,7 @@ class EnhancedTreeFeatureProcessor(TreeBasedFeatureProcessor):
 
             new_columns['inventory_popularity_rank'] = df['inventory_id'].map(self.inventory_popularity).fillna(len(self.inventory_popularity)/2).astype(np.float32)
             new_feature_count += 1
-            print(f"     ✅ inventory_popularity_rank: mean={new_columns['inventory_popularity_rank'].mean():.1f}")
+            print(f"     [SUCCESS] inventory_popularity_rank: mean={new_columns['inventory_popularity_rank'].mean():.1f}")
 
 
         if has_gender and has_age_group:
@@ -132,8 +133,8 @@ class EnhancedTreeFeatureProcessor(TreeBasedFeatureProcessor):
                 self.numerical_features.append(feat)
                 self.new_features.append(feat)
 
-        print(f"🎉 Created {new_feature_count} new EDA-based features!")
-        print(f"📊 New features: {[f for f in new_features if f in df.columns]}")
+        print(f"[SUCCESS] Created {new_feature_count} new EDA-based features!")
+        print(f"[INFO] New features: {[f for f in new_features if f in df.columns]}")
         return df
 
     def get_feature_importance_groups(self):

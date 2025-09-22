@@ -3,6 +3,7 @@ data/
 submissions/
 checkpoints/
 optuna_studies/
+catboost_info/
 
 # Python cache & logs
 __pycache__/

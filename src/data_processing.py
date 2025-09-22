@@ -5,6 +5,7 @@ import pickle
 import gc
 import logging
 from sklearn.preprocessing import LabelEncoder
+from config import CATEGORICAL_FEATURES
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
@@ -28,7 +29,7 @@ ENCODERS_PATH = MODEL_DIR / 'label_encoders.pkl'
 
 # Critical features from report
 CRITICAL_OUTLIER_FEATURES = ['feat_e_1', 'feat_e_2', 'feat_e_3', 'l_feat_2']
-CATEGORICAL_FEATURES = ['gender', 'age_group', 'inventory_id', 'day_of_week', 'hour']
+# CATEGORICAL_FEATURES는 config.py에서 import 해서 사용
 
 def create_directories():
     """필요한 디렉토리 생성"""

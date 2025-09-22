@@ -1,10 +1,18 @@
 """
-통합 설정 파일 - Toss CTR Challenge
-모든 모듈에서 공통으로 사용하는 설정을 중앙화하여 관리
+기본 프로젝트 설정 - Toss CTR Challenge
+경로, 디렉토리, 기본 파라미터 등 프로젝트 인프라 설정 관리
+
+역할:
+- 프로젝트 경로 및 디렉토리 구조
+- 데이터 파일 경로
+- 기본 XGBoost 파라미터
+- 범주형 피처 정의 (CATEGORICAL_FEATURES)
+- 디렉토리 생성 및 검증 함수
+
+모델별 하이퍼파라미터는 src/utils/config.py 참조
 """
 
 import os
-import xgboost as xgb
 from pathlib import Path
 
 # =============================================================================
@@ -21,7 +29,6 @@ SUBMISSIONS_DIR = PROJECT_ROOT / 'submissions'
 MODEL_SHARED_DIR = MODEL_DIR / 'shared'
 MODEL_EXPERIMENTS_DIR = MODEL_DIR / 'experiments'
 MODEL_PRODUCTION_DIR = MODEL_DIR / 'production'
-MODEL_ARCHIVED_DIR = MODEL_DIR / 'archived'
 
 # =============================================================================
 # 데이터 파일 경로
@@ -168,7 +175,7 @@ def create_directories():
     directories = [
         PROCESSED_DIR, MODEL_DIR, SUBMISSIONS_DIR,
         MODEL_SHARED_DIR, MODEL_EXPERIMENTS_DIR,
-        MODEL_PRODUCTION_DIR, MODEL_ARCHIVED_DIR
+        MODEL_PRODUCTION_DIR
     ]
     for directory in directories:
         directory.mkdir(exist_ok=True, parents=True)

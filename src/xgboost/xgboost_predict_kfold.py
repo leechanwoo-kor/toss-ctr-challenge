@@ -34,7 +34,7 @@ def load_kfold_models(kfold_dir):
 
 def load_test_data():
     """테스트 데이터 로드 및 전처리"""
-    print("📊 Loading test data...")
+    print("[INFO] Loading test data...")
 
     # 원본 테스트 데이터 로드
     test = pd.read_parquet("data/test.parquet")
@@ -56,7 +56,7 @@ def load_test_data():
     with open(f'{data_dir}/feature_names.pkl', 'rb') as f:
         feature_names = pickle.load(f)
 
-    print("🔧 Processing test data...")
+    print("[INFO] Processing test data...")
 
     # TreeBasedFeatureProcessor의 transform_test 메서드 사용
     if hasattr(processor, 'transform_test'):
@@ -68,14 +68,14 @@ def load_test_data():
     # 피처 순서 맞추기
     test_processed = test_processed[feature_names]
 
-    print(f"✅ Test data processed: {test_processed.shape}")
+    print(f"[SUCCESS] Test data processed: {test_processed.shape}")
 
     return test_processed, test_ids, feature_names
 
 
 def predict_kfold_ensemble():
     """K-fold 앙상블 예측"""
-    print("🚀 Starting K-Fold ensemble prediction...")
+    print("[INFO] Starting K-Fold ensemble prediction...")
 
     # 최신 K-fold 모델 디렉토리 찾기
     kfold_base_dir = "checkpoints/xgboost"
@@ -88,7 +88,7 @@ def predict_kfold_ensemble():
     latest_kfold = max(kfold_dirs, key=lambda x: os.path.getctime(os.path.join(kfold_base_dir, x)))
     kfold_dir = os.path.join(kfold_base_dir, latest_kfold)
 
-    print(f"🔍 Using K-fold models from: {kfold_dir}")
+    print(f"[INFO] Using K-fold models from: {kfold_dir}")
 
     # 모델들 로드
     models = load_kfold_models(kfold_dir)
@@ -97,7 +97,7 @@ def predict_kfold_ensemble():
     test_processed, test_ids, feature_names = load_test_data()
 
     # 예측
-    print("🔮 Generating predictions...")
+    print("[INFO] Generating predictions...")
     predictions = np.zeros(len(test_processed))
 
     for i, model in enumerate(models):
@@ -110,15 +110,15 @@ def predict_kfold_ensemble():
         fold_pred = model.predict(dtest)
         predictions += fold_pred / len(models)
 
-    print(f"✅ Ensemble predictions generated: {len(predictions):,}")
+    print(f"[SUCCESS] Ensemble predictions generated: {len(predictions):,}")
 
     # 예측 결과 검증
-    print("🔍 Validating predictions...")
+    print("[INFO] Validating predictions...")
     predictions = np.clip(predictions, 0, 1)
     predictions = np.nan_to_num(predictions, nan=0.5)
 
     # Submission 생성
-    print("📝 Creating submission...")
+    print("[INFO] Creating submission...")
 
     # submission 디렉토리 확인 (모델별 하위 폴더 사용)
     if os.path.exists('submissions'):
@@ -164,8 +164,8 @@ def predict_kfold_ensemble():
 
     submit.to_csv(output_path, index=False)
 
-    print(f"\n🎯 Submission saved: {output_path}")
-    print(f"📊 Prediction stats:")
+    print(f"\n[SUCCESS] Submission saved: {output_path}")
+    print(f"[INFO] Prediction stats:")
     print(f"  Count: {len(predictions):,}")
     print(f"  Min: {predictions.min():.6f}")
     print(f"  Max: {predictions.max():.6f}")
@@ -180,6 +180,6 @@ if __name__ == "__main__":
         predictions, output_path = predict_kfold_ensemble()
         print("\n🏆 K-Fold ensemble prediction completed successfully!")
     except Exception as e:
-        print(f"\n❌ Error: {e}")
+        print(f"\n[ERROR] Error: {e}")
         import traceback
         traceback.print_exc()
