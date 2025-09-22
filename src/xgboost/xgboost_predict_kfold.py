@@ -120,12 +120,14 @@ def predict_kfold_ensemble():
     # Submission 생성
     print("📝 Creating submission...")
 
-    # submission 디렉토리 확인
+    # submission 디렉토리 확인 (모델별 하위 폴더 사용)
     if os.path.exists('submissions'):
-        submit_dir = 'submissions'
+        submit_dir = 'submissions/xgboost'
     else:
-        os.makedirs('submissions', exist_ok=True)
-        submit_dir = 'submissions'
+        submit_dir = '../submissions/xgboost'
+
+    # xgboost 하위 폴더 생성
+    os.makedirs(submit_dir, exist_ok=True)
 
     # 샘플 submission 로드
     sample_paths = [

@@ -157,10 +157,14 @@ def predict_with_lightgbm(model_path=None, metadata_path=None):
 
     if os.path.exists('submissions/sample_submission.csv'):
         submit_path = 'submissions/sample_submission.csv'
-        output_path = f'submissions/lightgbm_{file_suffix}.csv'
+        base_dir = 'submissions/lightgbm'
     else:
         submit_path = '../submissions/sample_submission.csv'
-        output_path = f'../submissions/lightgbm_{file_suffix}.csv'
+        base_dir = '../submissions/lightgbm'
+
+    # lightgbm 하위 폴더 생성
+    os.makedirs(base_dir, exist_ok=True)
+    output_path = f'{base_dir}/lightgbm_{file_suffix}.csv'
 
     submit = pd.read_csv(submit_path)
     submit['clicked'] = predictions

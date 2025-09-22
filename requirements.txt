@@ -10,3 +10,4 @@ pyarrow==21.0.0
 wandb==0.21.3
 optuna
 optuna-integration
+catboost==1.2.8

@@ -92,9 +92,11 @@ def create_ensemble_submission(
     ensemble_df = xgb_df[['ID']].copy()
     ensemble_df['clicked'] = ensemble_preds
 
-    # 출력 파일 경로 생성
+    # 출력 파일 경로 생성 (모델별 하위 폴더 사용)
     timestamp = datetime.now().strftime('%m%d_%H%M')
-    output_path = f"submissions/ensemble_{output_suffix}_{timestamp}.csv"
+    base_dir = 'submissions/ensemble'
+    os.makedirs(base_dir, exist_ok=True)
+    output_path = f"{base_dir}/ensemble_{output_suffix}_{timestamp}.csv"
 
     # 파일 저장
     ensemble_df.to_csv(output_path, index=False)

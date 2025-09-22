@@ -81,6 +81,32 @@ XGBOOST_CONFIG = {
     "early_stopping_rounds": 30,
 }
 
+# CatBoost 현업 표준 설정 (CTR 최적화)
+CATBOOST_CONFIG = {
+    "iterations": 300,                   # 트리 수
+    "learning_rate": 0.1,                # 학습률
+    "depth": 8,                         # 트리 깊이
+    "l2_leaf_reg": 3,                   # L2 정규화
+    "border_count": 128,                # 범주 경계
+    "thread_count": -1,                 # 멀티쓰레딩
+    "random_seed": 42,                  # 재현성
+    "loss_function": "Logloss",         # 손실함수
+    "eval_metric": "AUC",               # 평가지표
+    "early_stopping_rounds": 30,        # 조기종료
+    "verbose": 50,                      # 로그 출력
+    "use_best_model": True,             # 최적 모델 사용
+    "task_type": "GPU",                 # GPU 사용
+    "class_weights": [1, 51.6],         # 클래스 불균형 (98.1/1.9)
+}
+
+# CatBoost WandB 설정
+CATBOOST_WANDB_CONFIG = {
+    "PROJECT": "toss-ctr-catboost",
+    "ENTITY": None,
+    "TAGS": ["catboost", "tree-based", "industry-standard", "full-dataset"],
+    "NOTES": "CatBoost with industry standard hyperparams for CTR prediction",
+}
+
 # K-Fold Cross Validation 설정
 KFOLD_CONFIG = {
     "n_splits": 5,                       # 5-fold CV

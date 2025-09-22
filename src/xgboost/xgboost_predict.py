@@ -188,10 +188,14 @@ def predict_with_xgboost(model_path=None, metadata_path=None):
 
     if os.path.exists('submissions/sample_submission.csv'):
         submit_path = 'submissions/sample_submission.csv'
-        output_path = f'submissions/xgboost_{file_suffix}.csv'
+        base_dir = 'submissions/xgboost'
     else:
         submit_path = '../submissions/sample_submission.csv'
-        output_path = f'../submissions/xgboost_{file_suffix}.csv'
+        base_dir = '../submissions/xgboost'
+
+    # xgboost 하위 폴더 생성
+    os.makedirs(base_dir, exist_ok=True)
+    output_path = f'{base_dir}/xgboost_{file_suffix}.csv'
 
     submit = pd.read_csv(submit_path)
     submit['clicked'] = predictions
