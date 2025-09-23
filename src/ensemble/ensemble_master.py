@@ -35,14 +35,14 @@ class EnsembleMaster:
         self.model_performance = {
             'xgboost': {'cv_score': 0.3554, 'weight_base': 1.0},
             'catboost': {'cv_score': 0.3525, 'weight_base': 0.85},
-            'deepfm': {'cv_score': 0.3407, 'weight_base': 0.65}
+            'deepfm': {'cv_score': 0.351, 'weight_base': 0.85}
         }
 
         # 기본 파일 경로 (프로젝트 루트 기준)
         self.model_paths = {
-            'xgboost': '../../submissions/xgboost/xgboost_kfold_0922_1500.csv',
-            'catboost': '../../submissions/catboost/submission_catboost_catboost-kfold-0920_0228_20250920_024927.csv',
-            'deepfm': '../../submissions/deepfm_enhanced_0922_1555_unknown.csv'
+            'xgboost': 'submissions/xgboost/xgboost_kfold_0922_1500.csv',
+            'catboost': 'submissions/catboost/submission_catboost_catboost-kfold-0920_0228_20250920_024927.csv',
+            'deepfm': 'submissions/deepfm/deepfm_simplified_predictions_0923_1432.csv'
         }
 
         self.predictions = {}
@@ -78,9 +78,9 @@ class EnsembleMaster:
     def _find_alternative(self, model_name):
         """대안 파일 찾기"""
         search_dirs = {
-            'xgboost': '../../submissions/xgboost/',
-            'catboost': '../../submissions/catboost/',
-            'deepfm': '../../submissions/'
+            'xgboost': 'submissions/xgboost/',
+            'catboost': 'submissions/catboost/',
+            'deepfm': 'submissions/deepfm/'
         }
 
         search_dir = search_dirs.get(model_name)
@@ -184,7 +184,7 @@ class EnsembleMaster:
 
         # 훈련 데이터 샘플 로드
         try:
-            train_df = pd.read_parquet("../../data/train.parquet")
+            train_df = pd.read_parquet("data/train.parquet")
             sample_size = min(500000, len(train_df))
             train_sample = train_df.sample(n=sample_size, random_state=42)
             y_true = train_sample['clicked'].values
@@ -262,7 +262,7 @@ class EnsembleMaster:
         print("Stacking ensemble complete")
         return self.results
 
-    def save_results(self, output_dir="../../submissions/ensemble"):
+    def save_results(self, output_dir="submissions/ensemble"):
         """결과 저장"""
         os.makedirs(output_dir, exist_ok=True)
         timestamp = datetime.now().strftime('%m%d_%H%M')
@@ -342,7 +342,7 @@ def main():
     parser = argparse.ArgumentParser(description='Ensemble Master Script')
     parser.add_argument('--mode', choices=['weighted', 'stacking', 'all', 'analyze'],
                        default='all', help='Ensemble mode to run')
-    parser.add_argument('--output', default='../../submissions/ensemble',
+    parser.add_argument('--output', default='submissions/ensemble',
                        help='Output directory')
 
     args = parser.parse_args()

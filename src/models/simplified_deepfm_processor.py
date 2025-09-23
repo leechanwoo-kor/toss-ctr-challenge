@@ -53,10 +53,45 @@ class SimplifiedDeepFMProcessor(BaseFeatureProcessor):
         # 2. EDA 기반 피처 생성 (트리 모델과 동일)
         df = self._create_eda_features(df.copy(), is_training=True)
 
-        # 3. 시퀀스 피처 처리 (트리 모델과 동일: 완전 제거)
+        # 3. 시퀀스 피처 처리 (DeepFM 강점 활용: 메모리 효율적 처리)
         if 'seq' in df.columns:
-            print("🚀 Excluding sequence column (following Tree model approach)")
+            print("🚀 Adding sequence features (DeepFM advantage) - Memory optimized")
+
+            # 메모리 절약을 위해 배치 처리
+            batch_size = 500000  # 50만개씩 처리
+            seq_features_list = []
+
+            print(f"   Processing sequences in batches of {batch_size:,}...")
+            for i in range(0, len(df), batch_size):
+                batch_end = min(i + batch_size, len(df))
+                batch_seq = df['seq'].iloc[i:batch_end]
+
+                batch_seq_features = self.process_sequence_features(batch_seq)
+                seq_features_list.append(batch_seq_features)
+
+                print(f"   Processed batch {i//batch_size + 1}: {batch_end:,}/{len(df):,}")
+
+                # 메모리 해제
+                del batch_seq_features
+
+            # 결합
+            print("   Combining sequence features...")
+            seq_features = pd.concat(seq_features_list, axis=0, ignore_index=True)
+            del seq_features_list  # 메모리 해제
+
+            # 원본 seq 컬럼 제거 후 새 피처 추가
             df = df.drop('seq', axis=1)
+
+            # 컬럼별로 하나씩 추가 (메모리 절약)
+            for col in seq_features.columns:
+                df[col] = seq_features[col].values
+
+            del seq_features  # 메모리 해제
+
+            seq_cols = ['seq_length', 'seq_mean', 'seq_std', 'seq_min', 'seq_max', 'seq_sum',
+                       'seq_normalized_range', 'seq_density', 'seq_cv']
+            print(f"✅ Added sequence features: {len(seq_cols)} features")
+            print(f"   Sequence features: {seq_cols}")
 
         # 4. 수치형 피처 정의 (EDA 피처 포함, 범주형 제외)
         excluded_cols = EXCLUDE_COLUMNS.union(set(self.categorical_features))
@@ -68,17 +103,17 @@ class SimplifiedDeepFMProcessor(BaseFeatureProcessor):
         print(f"   - Categorical: {len(self.categorical_features)} (same as Tree)")
         print(f"   - Numerical: {len(self.numerical_features)} (including EDA + sequence)")
 
-        # 5. 수치형 피처 전처리 (DeepFM용 스케일링 적용)
-        df = self.preprocess_numerical_features(df)
-
-        # 6. 불필요한 피처 제거 (트리 모델과 동일)
+        # 5. 불필요한 피처 제거 (스케일링 전에 수행 - 더 효율적)
         df = self._remove_constant_features(df)
 
-        # 7. numerical_features 업데이트 (제거된 피처 반영)
+        # 6. numerical_features 업데이트 (제거된 피처 반영)
         excluded_cols = EXCLUDE_COLUMNS.union(set(self.categorical_features))
         self.numerical_features = [col for col in df.columns
                                  if col not in excluded_cols
                                  and pd.api.types.is_numeric_dtype(df[col])]
+
+        # 7. 수치형 피처 전처리 (정리된 피처들만 스케일링)
+        df = self.preprocess_numerical_features(df)
 
         print(f"📊 Final feature summary:")
         print(f"   - Categorical: {len(self.categorical_features)}")
@@ -93,9 +128,28 @@ class SimplifiedDeepFMProcessor(BaseFeatureProcessor):
         # 1. EDA 기반 피처 생성 (훈련 시와 동일)
         df = self._create_eda_features(df, is_training=False)
 
-        # 2. 시퀀스 피처 처리 (트리 모델과 동일: 완전 제거)
+        # 2. 시퀀스 피처 처리 (DeepFM 강점 활용: 메모리 효율적 처리)
         if 'seq' in df.columns:
+            print("   Processing sequence features for test data...")
+
+            # 테스트 데이터도 배치 처리 (더 작은 배치)
+            batch_size = 100000
+            seq_features_list = []
+
+            for i in range(0, len(df), batch_size):
+                batch_end = min(i + batch_size, len(df))
+                batch_seq = df['seq'].iloc[i:batch_end]
+                batch_seq_features = self.process_sequence_features(batch_seq)
+                seq_features_list.append(batch_seq_features)
+                del batch_seq_features
+
+            seq_features = pd.concat(seq_features_list, axis=0, ignore_index=True)
+            del seq_features_list
+
             df = df.drop('seq', axis=1)
+            for col in seq_features.columns:
+                df[col] = seq_features[col].values
+            del seq_features
 
         # 3. 범주형 피처 변환
         for col in self.categorical_features:
@@ -109,9 +163,14 @@ class SimplifiedDeepFMProcessor(BaseFeatureProcessor):
 
                 df[col] = self.categorical_encoders[col].transform(df[col])
 
-        # 4. 수치형 피처 전처리 (DeepFM에 필요한 스케일링 포함)
+        # 4. 불필요한 피처 제거 (훈련 시와 동일: 스케일링 전에 수행)
+        df = self._remove_constant_features(df)
+
+        # 5. 수치형 피처 전처리 (정리된 피처들만 스케일링)
         numerical_cols = [col for col in self.numerical_features if col in df.columns]
         if numerical_cols:
+            print(f"📊 Applying scaler to {len(numerical_cols)} numerical features")
+
             for col in numerical_cols:
                 df = self._apply_numerical_preprocessing_step(df, col, is_training=False)
 
@@ -120,8 +179,16 @@ class SimplifiedDeepFMProcessor(BaseFeatureProcessor):
             df[numerical_cols] = df[numerical_cols].astype(np.float32)
             print(f"✅ Applied trained QuantileTransformer to {len(numerical_cols)} numerical features")
 
-        # 5. 불필요한 피처 제거
-        df = self._remove_constant_features(df)
+        # 6. 최종 피처 필터링 (필요시)
+        final_columns = set(self.categorical_features + self.numerical_features + ['clicked'])
+        if 'clicked' not in df.columns:
+            final_columns.remove('clicked')
+
+        current_columns = set(df.columns)
+        extra_columns = current_columns - final_columns
+        if extra_columns:
+            print(f"   Removing {len(extra_columns)} extra columns for final cleanup")
+            df = df.drop(columns=list(extra_columns))
 
         return df
 
@@ -196,8 +263,6 @@ class SimplifiedDeepFMProcessor(BaseFeatureProcessor):
 
     def _remove_constant_features(self, df):
         """트리 모델과 동일한 피처 제거"""
-        removed_features = []
-
         all_features_to_remove = (
             self.constant_features_to_remove +
             self.duplicate_features_to_remove +
@@ -205,13 +270,13 @@ class SimplifiedDeepFMProcessor(BaseFeatureProcessor):
             self.low_importance_features
         )
 
-        for feat in all_features_to_remove:
-            if feat in df.columns:
-                df = df.drop(columns=[feat])
-                removed_features.append(feat)
+        # Collect features that actually exist in the dataframe
+        features_to_remove = [feat for feat in all_features_to_remove if feat in df.columns]
 
-        if removed_features:
-            print(f"🗑️ Removed features (same as Tree): {removed_features}")
+        if features_to_remove:
+            # Drop all features at once to avoid memory issues
+            df = df.drop(columns=features_to_remove)
+            print(f"🗑️ Removed features (same as Tree): {features_to_remove}")
 
         return df
 
@@ -228,32 +293,32 @@ class SimplifiedDeepFMProcessor(BaseFeatureProcessor):
         print(f"   Applying QuantileTransformer to {len(self.numerical_features)} features...")
         batch_size = 100000  # 메모리 절약을 위한 배치 처리
 
-        if len(df) > batch_size:
-            print(f"   Processing in batches of {batch_size:,} samples...")
-            # 먼저 샘플로 fit
-            sample_df = df[self.numerical_features].sample(n=min(batch_size, len(df)), random_state=42)
-            self.scaler.fit(sample_df)
+        # 더 작은 배치로 처리 (메모리 극한 최적화)
+        smaller_batch = 50000  # 5만개씩 처리
+        print(f"   Processing QuantileTransformer in smaller batches of {smaller_batch:,} samples...")
 
-            # 배치로 transform
-            processed_features = []
-            for i in range(0, len(df), batch_size):
-                batch_end = min(i + batch_size, len(df))
-                batch_df = df[self.numerical_features].iloc[i:batch_end]
-                processed_batch = self.scaler.transform(batch_df)
-                processed_features.append(processed_batch)
+        # 먼저 샘플로 fit
+        sample_df = df[self.numerical_features].sample(n=min(smaller_batch, len(df)), random_state=42)
+        self.scaler.fit(sample_df)
+        del sample_df
 
-                if i % (batch_size * 5) == 0:  # 진행률 출력
-                    print(f"   Processed {batch_end:,}/{len(df):,} samples...")
+        # 배치로 transform하면서 즉시 다시 할당 (메모리 절약)
+        for i in range(0, len(df), smaller_batch):
+            batch_end = min(i + smaller_batch, len(df))
+            batch_df = df[self.numerical_features].iloc[i:batch_end]
+            processed_batch = self.scaler.transform(batch_df).astype(np.float32)
 
-            # 결합
-            df[self.numerical_features] = np.vstack(processed_features)
-        else:
-            df[self.numerical_features] = self.scaler.fit_transform(df[self.numerical_features])
+            # 즉시 원본에 할당 (메모리 절약)
+            df.iloc[i:batch_end, df.columns.get_indexer(self.numerical_features)] = processed_batch
+
+            del batch_df, processed_batch  # 메모리 해제
+
+            if i % (smaller_batch * 10) == 0:  # 진행률 출력
+                print(f"   Processed {batch_end:,}/{len(df):,} samples...")
 
         print(f"✅ Applied QuantileTransformer to {len(self.numerical_features)} numerical features (DeepFM-optimized)")
 
-        # 3. float32로 변환 (메모리 최적화)
-        df[self.numerical_features] = df[self.numerical_features].astype(np.float32)
+        # 3. float32 변환은 이미 위에서 완료됨
 
         return df
 
