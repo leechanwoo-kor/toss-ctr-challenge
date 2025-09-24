@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import xgboost as xgb
 from sklearn.model_selection import StratifiedKFold
-from sklearn.metrics import roc_auc_score, average_precision_score, log_loss
+from sklearn.metrics import roc_auc_score
 import wandb
 import pickle
 from datetime import datetime
@@ -19,43 +19,53 @@ from src.utils.config import XGBOOST_CONFIG, XGBOOST_WANDB_CONFIG, KFOLD_CONFIG
 from src.utils.metrics import calculate_competition_metrics
 
 
+# WandB 콜백 제거 - fold 완료 시점에만 핵심 메트릭 로깅으로 단순화
+
+
+# Constants
+DATA_DIR = "data/processed/xgboost"
+REQUIRED_FILES = [
+    "X_train.npy",
+    "X_val.npy",
+    "y_train.npy",
+    "y_val.npy",
+    "metadata.pkl",
+    "processor.pkl",
+    "feature_names.pkl",
+]
+CHECKPOINT_DIR = "checkpoints/xgboost"
+
+
 def load_prepared_data():
     """Load prepared training and validation data"""
-    print("📁 Loading prepared data...")
-
-    data_dir = "data/processed/xgboost"
+    print("Loading prepared data...")
 
     # 데이터 파일 존재 확인
-    required_files = [
-        "X_train.npy",
-        "X_val.npy",
-        "y_train.npy",
-        "y_val.npy",
-        "metadata.pkl",
-        "processor.pkl",
-        "feature_names.pkl",
-    ]
-    for file in required_files:
-        if not os.path.exists(os.path.join(data_dir, file)):
+    for file in REQUIRED_FILES:
+        if not os.path.exists(os.path.join(DATA_DIR, file)):
             raise FileNotFoundError(
                 f"Required file not found: {file}. Run 'python -m src.xgboost.xgboost_prepare_data' first."
             )
 
-    # 데이터 로드
-    X_train = np.load(f"{data_dir}/X_train.npy")
-    X_val = np.load(f"{data_dir}/X_val.npy")
-    y_train = np.load(f"{data_dir}/y_train.npy")
-    y_val = np.load(f"{data_dir}/y_val.npy")
+    try:
+        # 피처명 먼저 로드
+        with open(f"{DATA_DIR}/feature_names.pkl", "rb") as f:
+            feature_names = pickle.load(f)
 
-    # 피처명 로드
-    with open(f"{data_dir}/feature_names.pkl", "rb") as f:
-        feature_names = pickle.load(f)
+        # 데이터를 바로 DataFrame으로 로드 (메모리 효율적)
+        train_X = pd.DataFrame(
+            np.load(f"{DATA_DIR}/X_train.npy"),
+            columns=feature_names
+        )
+        val_X = pd.DataFrame(
+            np.load(f"{DATA_DIR}/X_val.npy"),
+            columns=feature_names
+        )
+        train_y = pd.Series(np.load(f"{DATA_DIR}/y_train.npy"))
+        val_y = pd.Series(np.load(f"{DATA_DIR}/y_val.npy"))
 
-    # pandas DataFrame으로 변환 (K-fold를 위해)
-    train_X = pd.DataFrame(X_train, columns=feature_names)
-    train_y = pd.Series(y_train)
-    val_X = pd.DataFrame(X_val, columns=feature_names)
-    val_y = pd.Series(y_val)
+    except Exception as e:
+        raise RuntimeError(f"Failed to load prepared data: {e}")
 
     print(f"Train: {train_X.shape}, Val: {val_X.shape}")
     print(f"Features: {len(feature_names)}")
@@ -78,10 +88,10 @@ def train_kfold_xgboost(X, y, val_X, val_y, config, kfold_config):
     val_predictions = np.zeros(len(val_y))
     oof_predictions = np.zeros(len(y))
 
-    print(f"🔄 Starting {kfold_config['n_splits']}-Fold Cross Validation...")
+    print(f"Starting {kfold_config['n_splits']}-Fold Cross Validation...")
 
     for fold, (train_idx, valid_idx) in enumerate(kf.split(X, y)):
-        print(f"\n📊 Fold {fold + 1}/{kfold_config['n_splits']}")
+        print(f"\nFold {fold + 1}/{kfold_config['n_splits']}")
 
         # Split data for this fold
         X_train_fold = X.iloc[train_idx]
@@ -94,39 +104,10 @@ def train_kfold_xgboost(X, y, val_X, val_y, config, kfold_config):
         dvalid = xgb.DMatrix(X_valid_fold, label=y_valid_fold)
 
         # Train model for this fold
-        print(f"🚀 Training fold {fold + 1}...")
+        print(f"Training fold {fold + 1}...")
         watchlist = [(dtrain, "train"), (dvalid, "valid")]
 
-        # WandB 콜백 클래스 (fold별)
-        class WandBFoldCallback(xgb.callback.TrainingCallback):
-            """각 fold의 training 과정을 WandB에 로깅하는 콜백"""
-
-            def __init__(self, fold_num):
-                self.fold_num = fold_num
-
-            def after_iteration(self, model, epoch, evals_log):
-                """매 iteration 후 호출"""
-                if epoch % 20 == 0:  # 20 iteration마다 로깅
-                    log_dict = {
-                        "fold": self.fold_num,
-                        "iteration": epoch,
-                        "fold_iteration": f"fold_{self.fold_num}_iter_{epoch}",
-                    }
-
-                    # evaluation 결과 로깅
-                    for eval_name, metrics in evals_log.items():
-                        for metric_name, values in metrics.items():
-                            if values:  # 값이 있는 경우만
-                                log_dict[
-                                    f"fold_{self.fold_num}_{eval_name}_{metric_name}"
-                                ] = values[-1]
-
-                    wandb.log(log_dict)
-
-                return False  # 학습을 계속하려면 False
-
-        wandb_callback = WandBFoldCallback(fold + 1)
-
+        # WandB 콜백은 제거하고 fold 완료 시에만 로깅 (더 깔끔한 차트)
         model = xgb.train(
             config,
             dtrain,
@@ -138,16 +119,15 @@ def train_kfold_xgboost(X, y, val_X, val_y, config, kfold_config):
 
         models.append(model)
 
-        # Predict on validation fold (out-of-fold)
-        dvalid_pred = xgb.DMatrix(X_valid_fold)
-        oof_predictions[valid_idx] = model.predict(dvalid_pred)
+        # Predict on validation fold (out-of-fold) - 한 번만 예측
+        fold_pred = model.predict(dvalid)
+        oof_predictions[valid_idx] = fold_pred
 
         # Predict on test set
         dval = xgb.DMatrix(val_X)
         val_predictions += model.predict(dval) / kfold_config["n_splits"]
 
-        # Calculate fold metrics
-        fold_pred = model.predict(dvalid_pred)
+        # Calculate fold metrics - 이미 계산된 fold_pred 재사용
         fold_auc = roc_auc_score(y_valid_fold, fold_pred)
         fold_metrics = calculate_competition_metrics(y_valid_fold, fold_pred)
         fold_comp_score = fold_metrics["comp_score"]
@@ -159,43 +139,34 @@ def train_kfold_xgboost(X, y, val_X, val_y, config, kfold_config):
         print(f"   Fold {fold + 1} AUC: {fold_auc:.6f}")
         print(f"   Fold {fold + 1} Competition Score: {fold_comp_score:.6f}")
 
-        # 각 fold 완료 후 WandB에 로깅
+        # 각 fold 완료 후 WandB에 로깅 - 통합 메트릭으로
         wandb.log(
             {
-                f"fold_{fold+1}_final_auc": fold_auc,
-                f"fold_{fold+1}_final_comp_score": fold_comp_score,
-                f"fold_{fold+1}_best_iteration": model.best_iteration,
+                "fold_auc": fold_auc,
+                "fold_comp_score": fold_comp_score,
+                "best_iteration": model.best_iteration,
                 "completed_folds": fold + 1,
+                "fold_number": fold + 1,
             }
         )
 
     return models, oof_predictions, val_predictions, fold_scores
 
 
-def evaluate_predictions(y_true, y_pred, prefix=""):
-    """Calculate evaluation metrics"""
-    comp_metrics = calculate_competition_metrics(y_true, y_pred)
-
-    metrics = {
-        f"{prefix}auc": comp_metrics["auc"],
-        f"{prefix}ap": comp_metrics["ap"],
-        f"{prefix}comp_score": comp_metrics["comp_score"],
-        f"{prefix}wll": comp_metrics["wll"],
-    }
-
-    return metrics
-
-
 def main():
     start_time = time.time()
 
-    print("🚀 Starting XGBoost K-Fold training...")
+    try:
+        print("Starting XGBoost K-Fold training...")
 
-    # Load data
-    data_start = time.time()
-    train_X, train_y, val_X, val_y = load_prepared_data()
-    data_time = time.time() - data_start
-    print(f"Data loaded in {data_time:.2f} seconds")
+        # Load data
+        data_start = time.time()
+        train_X, train_y, val_X, val_y = load_prepared_data()
+        data_time = time.time() - data_start
+        print(f"Data loaded in {data_time:.2f} seconds")
+    except Exception as e:
+        print(f"Error during data loading: {e}")
+        return
 
     # Initialize WandB
     timestamp = datetime.now().strftime("%m%d_%H%M")
@@ -226,16 +197,28 @@ def main():
     )
     train_time = time.time() - train_start
 
-    print("\n🔮 Evaluating K-Fold results...")
+    print("\nEvaluating K-Fold results...")
 
     # Calculate Out-of-Fold metrics
-    oof_metrics = evaluate_predictions(train_y, oof_predictions, "oof_")
+    oof_comp_metrics = calculate_competition_metrics(train_y, oof_predictions)
+    oof_metrics = {
+        "oof_auc": oof_comp_metrics["auc"],
+        "oof_ap": oof_comp_metrics["ap"],
+        "oof_comp_score": oof_comp_metrics["comp_score"],
+        "oof_wll": oof_comp_metrics["wll"],
+    }
 
     # Calculate validation metrics
-    val_metrics = evaluate_predictions(val_y, val_predictions, "val_")
+    val_comp_metrics = calculate_competition_metrics(val_y, val_predictions)
+    val_metrics = {
+        "val_auc": val_comp_metrics["auc"],
+        "val_ap": val_comp_metrics["ap"],
+        "val_comp_score": val_comp_metrics["comp_score"],
+        "val_wll": val_comp_metrics["wll"],
+    }
 
     # Print fold results
-    print(f"\n📊 Individual Fold Results:")
+    print(f"\nIndividual Fold Results:")
     for fold_result in fold_scores:
         print(
             f"  Fold {fold_result['fold']}: AUC={fold_result['auc']:.6f}, CompScore={fold_result['comp_score']:.6f}"
@@ -245,22 +228,22 @@ def main():
     fold_aucs = [f["auc"] for f in fold_scores]
     fold_comp_scores = [f["comp_score"] for f in fold_scores]
 
-    print(f"\n📈 Cross-Validation Results:")
+    print(f"\nCross-Validation Results:")
     print(f"  CV AUC: {np.mean(fold_aucs):.6f} ± {np.std(fold_aucs):.6f}")
     print(
         f"  CV Competition Score: {np.mean(fold_comp_scores):.6f} ± {np.std(fold_comp_scores):.6f}"
     )
 
-    print(f"\n🎯 Out-of-Fold Metrics:")
+    print(f"\nOut-of-Fold Metrics:")
     print(f"  OOF AUC: {oof_metrics['oof_auc']:.6f}")
     print(f"  OOF Competition Score: {oof_metrics['oof_comp_score']:.6f}")
 
-    print(f"\n🎯 Validation Metrics (Ensemble):")
+    print(f"\nValidation Metrics (Ensemble):")
     print(f"  Val AUC: {val_metrics['val_auc']:.6f}")
     print(f"  Val Competition Score: {val_metrics['val_comp_score']:.6f}")
 
     # Save models
-    model_dir = f"checkpoints/xgboost/{run_name}"
+    model_dir = f"{CHECKPOINT_DIR}/{run_name}"
     os.makedirs(model_dir, exist_ok=True)
 
     for i, model in enumerate(models):
@@ -274,24 +257,29 @@ def main():
         f"{model_dir}/val_predictions.parquet"
     )
 
-    # Log to WandB
+    # 핵심 메트릭만 WandB에 로깅 (차트 깔끔하게)
     wandb.log(
         {
-            "training_time": train_time,
-            "total_time": time.time() - start_time,
-            "cv_auc_mean": np.mean(fold_aucs),
-            "cv_auc_std": np.std(fold_aucs),
-            "cv_comp_score_mean": np.mean(fold_comp_scores),
-            "cv_comp_score_std": np.std(fold_comp_scores),
-            **oof_metrics,
-            **val_metrics,
+            # 성능 메트릭 (가장 중요)
+            "final_val_comp_score": val_metrics["val_comp_score"],
+            "final_val_auc": val_metrics["val_auc"],
+            "final_cv_comp_score": np.mean(fold_comp_scores),
+            "final_cv_auc": np.mean(fold_aucs),
+            "cv_std": np.std(fold_comp_scores),
+
+            # 시간 메트릭
+            "training_time_minutes": train_time / 60,
+            "total_time_minutes": (time.time() - start_time) / 60,
+
+            # 목표 달성 여부
+            "target_achieved": val_metrics["val_comp_score"] >= 0.35,
         }
     )
 
     total_time = time.time() - start_time
 
     print("\n" + "=" * 50)
-    print("🎉 XGBoost K-Fold Training Completed!")
+    print("XGBoost K-Fold Training Completed!")
     print("=" * 50)
     print(f"Data Load Time: {data_time:.2f}s")
     print(f"Training Time: {train_time:.2f}s")
@@ -301,9 +289,9 @@ def main():
     # Target achievement check
     target_score = 0.35
     achieved = val_metrics["val_comp_score"] >= target_score
-    print(f"🎯 Target: {target_score}+ (current: {val_metrics['val_comp_score']:.6f})")
+    print(f"Target: {target_score}+ (current: {val_metrics['val_comp_score']:.6f})")
     if achieved:
-        print("🎉 TARGET ACHIEVED with K-Fold ensemble!")
+        print("TARGET ACHIEVED with K-Fold ensemble!")
 
     wandb.finish()
 

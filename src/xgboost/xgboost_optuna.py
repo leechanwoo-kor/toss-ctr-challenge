@@ -24,83 +24,91 @@ sys.path.append(
 from src.utils.metrics import calculate_competition_metrics
 from src.utils.config import XGBOOST_CONFIG, XGBOOST_WANDB_CONFIG, KFOLD_CONFIG
 
+# Constants
+DATA_DIR = "data/processed/xgboost"
+CHECKPOINT_DIR = "checkpoints/xgboost"
+OPTUNA_STUDIES_DIR = "optuna_studies"
+TARGET_SCORE = 0.35
+N_TRIALS = 100  # 더 많은 trial로 정밀 탐색
+TIMEOUT_HOURS = 6  # 충분한 탐색 시간
+
 
 def load_prepared_data():
     """전처리된 데이터 로드"""
-    print("📁 Loading prepared data...")
-
-    data_dir = "data/processed/xgboost_processed"
+    print("Loading prepared data...")
 
     # 데이터 파일 존재 확인
     required_files = [
-        "X_train.npy",
-        "X_val.npy",
-        "y_train.npy",
-        "y_val.npy",
-        "metadata.pkl",
-        "processor.pkl",
-        "feature_names.pkl",
+        "X_train.npy", "X_val.npy", "y_train.npy", "y_val.npy",
+        "metadata.pkl", "processor.pkl", "feature_names.pkl"
     ]
+
     for file in required_files:
-        if not os.path.exists(os.path.join(data_dir, file)):
+        if not os.path.exists(os.path.join(DATA_DIR, file)):
             raise FileNotFoundError(
                 f"Required file not found: {file}. Run 'python -m src.xgboost.xgboost_prepare_data' first."
             )
 
-    # 데이터 로드
-    X_train = np.load(f"{data_dir}/X_train.npy")
-    X_val = np.load(f"{data_dir}/X_val.npy")
-    y_train = np.load(f"{data_dir}/y_train.npy")
-    y_val = np.load(f"{data_dir}/y_val.npy")
+    try:
+        # 피처명 먼저 로드
+        with open(f"{DATA_DIR}/feature_names.pkl", "rb") as f:
+            feature_names = pickle.load(f)
 
-    # 피처명 로드
-    with open(f"{data_dir}/feature_names.pkl", "rb") as f:
-        feature_names = pickle.load(f)
+        # 데이터를 바로 DataFrame으로 로드 (메모리 효율적)
+        train_X = pd.DataFrame(
+            np.load(f"{DATA_DIR}/X_train.npy"), columns=feature_names
+        )
+        val_X = pd.DataFrame(
+            np.load(f"{DATA_DIR}/X_val.npy"), columns=feature_names
+        )
+        train_y = pd.Series(np.load(f"{DATA_DIR}/y_train.npy"))
+        val_y = pd.Series(np.load(f"{DATA_DIR}/y_val.npy"))
 
-    # pandas DataFrame으로 변환 (K-fold를 위해)
-    train_X = pd.DataFrame(X_train, columns=feature_names)
-    train_y = pd.Series(y_train)
-    val_X = pd.DataFrame(X_val, columns=feature_names)
-    val_y = pd.Series(y_val)
+        print(f"Train: {train_X.shape}, Val: {val_X.shape}")
+        print(f"Features: {len(feature_names)}")
 
-    print(f"Train: {train_X.shape}, Val: {val_X.shape}")
-    print(f"Features: {len(feature_names)}")
+        return train_X, train_y, val_X, val_y, feature_names
 
-    return train_X, train_y, val_X, val_y, feature_names
+    except Exception as e:
+        raise RuntimeError(f"Failed to load prepared data: {e}")
 
 
 def objective(trial):
     """Optuna 목적 함수 - K-fold CV로 하이퍼파라미터 최적화"""
 
-    print(f"\n🔍 Trial {trial.number} starting...")
+    print(f"\nTrial {trial.number} starting...")
 
-    # 하이퍼파라미터 제안 - "Less is More" 전략
+    # 🎯 현재 최고 성능(0.355) 달성을 위한 정교한 하이퍼파라미터 탐색
+    # 베이스라인: max_depth=6, learning_rate=0.1, n_estimators=200 주변 탐색
     params = {
         "objective": "binary:logistic",
         "eval_metric": "logloss",
         "booster": "gbtree",
         "device": "cuda:0",
         "tree_method": "hist",
-        # 🎯 현재 최고 성능(200 iter, max_depth=8, min_child_weight=100) 주변 정밀 탐색
-        "max_depth": trial.suggest_int("max_depth", 6, 10),  # 6-10으로 확장
-        "learning_rate": trial.suggest_float("learning_rate", 0.08, 0.15),  # 0.1 주변
-        "n_estimators": trial.suggest_int(
-            "n_estimators", 150, 250, step=25
-        ),  # 200 주변으로 조정
-        "subsample": trial.suggest_float("subsample", 0.85, 0.95),  # 0.9 주변
-        "colsample_bytree": trial.suggest_float(
-            "colsample_bytree", 0.85, 0.95
-        ),  # 0.9 주변
-        "colsample_bylevel": trial.suggest_float(
-            "colsample_bylevel", 0.85, 0.95
-        ),  # 0.9 주변
-        "min_child_weight": trial.suggest_int(
-            "min_child_weight", 50, 150
-        ),  # 100 주변으로 조정
-        "reg_alpha": trial.suggest_float("reg_alpha", 0.05, 0.2),  # 0.1 주변
-        "reg_lambda": trial.suggest_float("reg_lambda", 0.05, 0.2),  # 0.1 주변
-        # 고정 파라미터들
-        "scale_pos_weight": 51.6,
+
+        # Core hyperparameters - 더 집중적인 탐색
+        "max_depth": trial.suggest_int("max_depth", 5, 9),  # 깊이를 조금 더 다양하게
+        "learning_rate": trial.suggest_float("learning_rate", 0.05, 0.2, log=True),  # log scale로 더 넓게
+        "n_estimators": trial.suggest_int("n_estimators", 100, 400, step=25),  # 더 넓은 범위
+
+        # Regularization - 과적합 방지를 위한 정교한 조정
+        "min_child_weight": trial.suggest_int("min_child_weight", 10, 200),  # 더 넓은 범위
+        "reg_alpha": trial.suggest_float("reg_alpha", 0.001, 1.0, log=True),  # L1 정규화 강화
+        "reg_lambda": trial.suggest_float("reg_lambda", 0.001, 10.0, log=True),  # L2 정규화 강화
+
+        # Sampling parameters - 일반화 성능 향상
+        "subsample": trial.suggest_float("subsample", 0.7, 1.0),  # 더 넓은 범위
+        "colsample_bytree": trial.suggest_float("colsample_bytree", 0.7, 1.0),
+        "colsample_bylevel": trial.suggest_float("colsample_bylevel", 0.7, 1.0),
+        "colsample_bynode": trial.suggest_float("colsample_bynode", 0.7, 1.0),  # 추가 sampling
+
+        # Advanced parameters
+        "gamma": trial.suggest_float("gamma", 0.0, 5.0),  # 최소 분할 손실
+        "max_delta_step": trial.suggest_int("max_delta_step", 0, 10),  # 불균형 데이터용
+
+        # Fixed parameters
+        "scale_pos_weight": 51.6,  # 클래스 불균형 보정
         "random_state": 42,
         "n_jobs": -1,
         "verbosity": 0,
@@ -129,24 +137,23 @@ def objective(trial):
         dtrain = xgb.DMatrix(X_train_fold, label=y_train_fold)
         dvalid = xgb.DMatrix(X_valid_fold, label=y_valid_fold)
 
-        # Pruning callback 복구 (warning은 숨김 처리됨)
-        pruning_callback = XGBoostPruningCallback(trial, f"valid-logloss")
+        # More aggressive pruning for efficiency
+        pruning_callback = XGBoostPruningCallback(trial, "valid-logloss")
 
-        # Train model
+        # Train model with early stopping
         try:
             model = xgb.train(
                 params,
                 dtrain,
                 num_boost_round=params["n_estimators"],
                 evals=[(dtrain, "train"), (dvalid, "valid")],
-                early_stopping_rounds=30,  # 빠른 수렴 유도
+                early_stopping_rounds=50,  # 더 관대한 early stopping
                 verbose_eval=False,
                 callbacks=[pruning_callback],
             )
 
-            # Predict and evaluate
-            dvalid_pred = xgb.DMatrix(X_valid_fold)
-            fold_pred = model.predict(dvalid_pred)
+            # Predict and evaluate (재사용된 dvalid 사용)
+            fold_pred = model.predict(dvalid)
 
             # Competition score 계산
             fold_metrics = calculate_competition_metrics(y_valid_fold, fold_pred)
@@ -164,42 +171,48 @@ def objective(trial):
     cv_mean = np.mean(cv_scores)
     cv_std = np.std(cv_scores)
 
-    # 🎯 더 균형잡힌 목적 함수
-    # CV 표준편차 페널티를 줄임
-    generalization_penalty = cv_std * 1.0  # 표준편차 1배 페널티 (기존 3배에서 감소)
-    objective_score = cv_mean - generalization_penalty
+    # 🎯 개선된 목적 함수 - 성능과 안정성의 균형
+    # 표준편차 페널티를 더 합리적으로 조정
+    stability_penalty = cv_std * 0.5  # 안정성 페널티 감소
 
-    # WandB에 trial 결과 로깅
+    objective_score = cv_mean - stability_penalty
+
+    # 깔끔한 WandB 로깅 - 핵심 메트릭만
     wandb.log(
         {
-            f"trial_{trial.number}_cv_score": cv_mean,
-            f"trial_{trial.number}_cv_std": cv_std,
-            f"trial_{trial.number}_objective_score": objective_score,
-            f"trial_{trial.number}_penalty": generalization_penalty,
-            **{
-                f"trial_{trial.number}_{key}": value
-                for key, value in trial.params.items()
-            },
+            "trial_cv_score": cv_mean,
+            "trial_cv_std": cv_std,
+            "trial_objective": objective_score,
+            "trial_penalty": stability_penalty,
+            "trial_number": trial.number,
+            # 핵심 하이퍼파라미터만 로깅
+            "max_depth": trial.params["max_depth"],
+            "learning_rate": trial.params["learning_rate"],
+            "n_estimators": trial.params["n_estimators"],
         }
     )
 
     print(
-        f"Trial {trial.number}: CV Score = {cv_mean:.6f} ± {cv_std:.6f}, Objective = {objective_score:.6f}"
+        f"Trial {trial.number}: CV={cv_mean:.6f}±{cv_std:.6f}, Obj={objective_score:.6f}"
     )
 
-    return objective_score  # 페널티 적용된 점수 반환
+    return objective_score
 
 
 def main():
     """메인 함수"""
     global X_train, y_train, X_val, y_val
 
-    print("🚀 Starting XGBoost K-Fold Optuna Optimization...")
+    print("Starting XGBoost K-Fold Optuna Optimization...")
 
-    # 데이터 로드
-    start_time = time.time()
-    X_train, y_train, X_val, y_val, feature_names = load_prepared_data()
-    print(f"Data loaded in {time.time() - start_time:.2f} seconds")
+    try:
+        # 데이터 로드
+        start_time = time.time()
+        X_train, y_train, X_val, y_val, feature_names = load_prepared_data()
+        print(f"Data loaded in {time.time() - start_time:.2f} seconds")
+    except Exception as e:
+        print(f"Error loading data: {e}")
+        return
 
     # WandB 초기화
     timestamp = datetime.now().strftime("%m%d_%H%M")
@@ -221,47 +234,59 @@ def main():
         },
     )
 
-    # Optuna study 생성
+    # Optuna study 생성 - 개선된 설정
     study_name = f"xgboost-kfold-{timestamp}"
-    storage = f"sqlite:///optuna_studies/{study_name}.db"
-    os.makedirs("optuna_studies", exist_ok=True)
+    storage = f"sqlite:///{OPTUNA_STUDIES_DIR}/{study_name}.db"
+    os.makedirs(OPTUNA_STUDIES_DIR, exist_ok=True)
 
+    # 더 aggressive한 pruning으로 효율성 향상
     study = optuna.create_study(
         study_name=study_name,
         storage=storage,
         direction="maximize",  # Competition score 최대화
         pruner=optuna.pruners.MedianPruner(
-            n_startup_trials=5, n_warmup_steps=100, interval_steps=20
+            n_startup_trials=10,    # 더 많은 startup trials
+            n_warmup_steps=50,      # 더 빠른 warmup
+            interval_steps=10       # 더 자주 pruning 체크
         ),
         load_if_exists=True,
     )
 
-    print(f"📊 Optuna Study: {study_name}")
-    print(f"🎯 Target: Maximize Competition Score")
-    print(f"🔄 K-Fold: {KFOLD_CONFIG['n_splits']}-fold Cross Validation")
+    print(f"Optuna Study: {study_name}")
+    print(f"Target: {TARGET_SCORE}+ Competition Score")
+    print(f"K-Fold: {KFOLD_CONFIG['n_splits']}-fold Cross Validation")
 
-    # 최적화 실행 - 현재 최고 성능 주변 정밀 탐색
-    n_trials = 50  # 정밀 탐색으로 최적해 발견
-    print(f"🚀 Starting optimization with {n_trials} trials...")
-    print(
-        f"🎯 Strategy: Fine-tuning around current best performance (200 iter, max_depth=8, min_child_weight=100)"
-    )
+    # 최적화 실행
+    print(f"Starting optimization with {N_TRIALS} trials...")
+    print(f"Strategy: Comprehensive hyperparameter search with advanced regularization")
+    print(f"Timeout: {TIMEOUT_HOURS} hours")
 
     try:
-        study.optimize(objective, n_trials=n_trials, timeout=3600 * 4)  # 4시간 제한
+        study.optimize(
+            objective,
+            n_trials=N_TRIALS,
+            timeout=3600 * TIMEOUT_HOURS,
+            show_progress_bar=True
+        )
     except KeyboardInterrupt:
-        print("⚠️ Optimization interrupted by user")
+        print("Optimization interrupted by user")
 
-    # 최적 결과
+    # 최적 결과 검증
+    if len(study.trials) == 0:
+        print("No trials completed successfully")
+        wandb.finish()
+        return
+
     best_trial = study.best_trial
-    print(f"\n🎉 Best trial: {best_trial.number}")
-    print(f"🏆 Best CV Score: {best_trial.value:.6f}")
-    print(f"📋 Best parameters:")
+    print(f"\nBest trial: {best_trial.number}")
+    print(f"Best CV Score: {best_trial.value:.6f}")
+    print(f"Total trials: {len(study.trials)}")
+    print(f"Best parameters:")
     for key, value in best_trial.params.items():
         print(f"  {key}: {value}")
 
     # 최적 파라미터로 최종 학습 및 평가
-    print(f"\n🔄 Training final model with best parameters...")
+    print(f"\nTraining final model with best parameters...")
 
     best_params = best_trial.params.copy()
     best_params.update(
@@ -323,13 +348,13 @@ def main():
     # 최종 평가
     final_metrics = calculate_competition_metrics(y_val, val_predictions)
 
-    print(f"\n🎯 Final Results:")
+    print(f"\nFinal Results:")
     print(f"CV Score: {np.mean(final_cv_scores):.6f} ± {np.std(final_cv_scores):.6f}")
     print(f"Validation Score: {final_metrics['comp_score']:.6f}")
     print(f"Validation AUC: {final_metrics['auc']:.6f}")
 
     # 결과 저장
-    result_dir = f"checkpoints/xgboost/{run_name}"
+    result_dir = f"{CHECKPOINT_DIR}/{run_name}"
     os.makedirs(result_dir, exist_ok=True)
 
     for i, model in enumerate(final_models):
@@ -358,13 +383,13 @@ def main():
 
     wandb.finish()
 
-    target_achieved = final_metrics["comp_score"] >= 0.35
+    target_achieved = final_metrics["comp_score"] >= TARGET_SCORE
     if target_achieved:
-        print(f"🎉 TARGET ACHIEVED: {final_metrics['comp_score']:.6f} >= 0.35")
+        print(f"TARGET ACHIEVED: {final_metrics['comp_score']:.6f} >= {TARGET_SCORE}")
     else:
-        print(f"🎯 Target: 0.35+ (current: {final_metrics['comp_score']:.6f})")
+        print(f"Target: {TARGET_SCORE}+ (current: {final_metrics['comp_score']:.6f})")
 
-    print(f"\n💾 Results saved: {result_dir}")
+    print(f"\nResults saved: {result_dir}")
 
 
 if __name__ == "__main__":
