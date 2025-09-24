@@ -207,8 +207,9 @@ def main():
         weight_decay=DEEPFM_CONFIG['WEIGHT_DECAY']
     )
 
+    # ReduceLROnPlateau: CTR 예측에서 표준적으로 사용
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='max', patience=2, factor=0.5
+        optimizer, mode='max', patience=3, factor=0.7
     )
 
     # 6. 훈련
@@ -335,7 +336,7 @@ def main():
         else:
             patience_counter += 1
 
-        # 학습률 스케줄링
+        # 학습률 스케줄링 (ReduceLROnPlateau)
         scheduler.step(competition_score)
 
         # Early stopping

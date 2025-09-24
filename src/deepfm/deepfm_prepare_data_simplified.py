@@ -129,7 +129,7 @@ def main():
         'enhancement_type': 'tree_compatible',
         'comparison_info': {
             'purpose': 'Fair comparison with Tree models',
-            'features_used': 'Same as EnhancedTreeFeatureProcessor',
+            'features_used': 'Same as XGBoostFeatureProcessor',
             'categorical_count': len(categorical_features),
             'numerical_count': len(processor.numerical_features)
         }

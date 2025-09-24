@@ -13,7 +13,7 @@ from catboost import CatBoostClassifier, Pool
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from src.models.enhanced_tree_processor import EnhancedTreeFeatureProcessor
+from src.models.xgboost_feature_processor import XGBoostFeatureProcessor
 
 
 def find_latest_catboost_model():
@@ -66,7 +66,7 @@ def predict_with_catboost(model_dir_path=None, experiment_name=None):
 
     # 피처 프로세서 로드 (학습시 사용된 것)
     print("🔧 Loading feature processor...")
-    processor_path = 'data/processed/xgboost_enhanced/processor.pkl'
+    processor_path = 'data/processed/xgboost_processed/processor.pkl'
     with open(processor_path, 'rb') as f:
         processor = pickle.load(f)
 

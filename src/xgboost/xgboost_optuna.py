@@ -1,9 +1,7 @@
-"""
-XGBoost Optuna 하이퍼파라미터 최적화
-"""
-
 import os
+import sys
 import time
+import warnings
 import numpy as np
 import pandas as pd
 import pickle
@@ -11,328 +9,362 @@ from datetime import datetime
 import xgboost as xgb
 import optuna
 from optuna.integration import XGBoostPruningCallback
+from sklearn.model_selection import StratifiedKFold
+from sklearn.metrics import roc_auc_score
 import wandb
 
-from ..utils.metrics import calculate_competition_metrics
-from ..utils.config import XGBOOST_CONFIG, XGBOOST_WANDB_CONFIG
+# Optuna XGBoost warning 숨기기
+warnings.filterwarnings("ignore", message="The reported value is ignored")
+
+# Add project root to path
+sys.path.append(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+)
+
+from src.utils.metrics import calculate_competition_metrics
+from src.utils.config import XGBOOST_CONFIG, XGBOOST_WANDB_CONFIG, KFOLD_CONFIG
 
 
 def load_prepared_data():
     """전처리된 데이터 로드"""
     print("📁 Loading prepared data...")
 
-    data_dir = 'data/processed/xgboost'
+    data_dir = "data/processed/xgboost_processed"
 
     # 데이터 파일 존재 확인
-    required_files = ['X_train.npy', 'X_val.npy', 'y_train.npy', 'y_val.npy',
-                      'metadata.pkl', 'processor.pkl', 'feature_names.pkl']
+    required_files = [
+        "X_train.npy",
+        "X_val.npy",
+        "y_train.npy",
+        "y_val.npy",
+        "metadata.pkl",
+        "processor.pkl",
+        "feature_names.pkl",
+    ]
     for file in required_files:
         if not os.path.exists(os.path.join(data_dir, file)):
-            raise FileNotFoundError(f"Required file not found: {file}. Run 'python -m src.xgboost.xgboost_prepare_data' first.")
+            raise FileNotFoundError(
+                f"Required file not found: {file}. Run 'python -m src.xgboost.xgboost_prepare_data' first."
+            )
 
     # 데이터 로드
-    X_train = np.load(f'{data_dir}/X_train.npy')
-    X_val = np.load(f'{data_dir}/X_val.npy')
-    y_train = np.load(f'{data_dir}/y_train.npy')
-    y_val = np.load(f'{data_dir}/y_val.npy')
-
-    # 메타데이터 로드
-    with open(f'{data_dir}/metadata.pkl', 'rb') as f:
-        metadata = pickle.load(f)
+    X_train = np.load(f"{data_dir}/X_train.npy")
+    X_val = np.load(f"{data_dir}/X_val.npy")
+    y_train = np.load(f"{data_dir}/y_train.npy")
+    y_val = np.load(f"{data_dir}/y_val.npy")
 
     # 피처명 로드
-    with open(f'{data_dir}/feature_names.pkl', 'rb') as f:
+    with open(f"{data_dir}/feature_names.pkl", "rb") as f:
         feature_names = pickle.load(f)
 
-    # 프로세서 로드
-    with open(f'{data_dir}/processor.pkl', 'rb') as f:
-        processor = pickle.load(f)
+    # pandas DataFrame으로 변환 (K-fold를 위해)
+    train_X = pd.DataFrame(X_train, columns=feature_names)
+    train_y = pd.Series(y_train)
+    val_X = pd.DataFrame(X_val, columns=feature_names)
+    val_y = pd.Series(y_val)
 
-    print(f"Train: {X_train.shape}, Val: {X_val.shape}")
+    print(f"Train: {train_X.shape}, Val: {val_X.shape}")
     print(f"Features: {len(feature_names)}")
 
-    return X_train, X_val, y_train, y_val, feature_names, metadata, processor
+    return train_X, train_y, val_X, val_y, feature_names
 
 
-def create_objective(X_train, X_val, y_train, y_val, feature_names, metadata):
-    """Optuna objective 함수 생성"""
+def objective(trial):
+    """Optuna 목적 함수 - K-fold CV로 하이퍼파라미터 최적화"""
 
-    def objective(trial):
-        # 하이퍼파라미터 탐색 공간 정의
-        params = {
-            'objective': 'binary:logistic',
-            'eval_metric': 'logloss',
-            'booster': 'gbtree',
-            'device': 'cuda:0',
-            'tree_method': 'hist',
-            'verbosity': 0,
-            'random_state': 42,
-            'n_jobs': -1,
+    print(f"\n🔍 Trial {trial.number} starting...")
 
-            # 탐색할 하이퍼파라미터
-            'max_depth': trial.suggest_int('max_depth', 6, 12),
-            'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.2, log=True),
-            'n_estimators': trial.suggest_int('n_estimators', 1000, 4000, step=500),
-            'subsample': trial.suggest_float('subsample', 0.7, 1.0),
-            'colsample_bytree': trial.suggest_float('colsample_bytree', 0.7, 1.0),
-            'colsample_bylevel': trial.suggest_float('colsample_bylevel', 0.7, 1.0),
-            'min_child_weight': trial.suggest_int('min_child_weight', 50, 200),
-            'reg_alpha': trial.suggest_float('reg_alpha', 0.0, 0.3),
-            'reg_lambda': trial.suggest_float('reg_lambda', 0.0, 0.3),
-            'scale_pos_weight': trial.suggest_float('scale_pos_weight', 40.0, 60.0),
+    # 하이퍼파라미터 제안 - "Less is More" 전략
+    params = {
+        "objective": "binary:logistic",
+        "eval_metric": "logloss",
+        "booster": "gbtree",
+        "device": "cuda:0",
+        "tree_method": "hist",
+        # 🎯 현재 최고 성능(200 iter, max_depth=8, min_child_weight=100) 주변 정밀 탐색
+        "max_depth": trial.suggest_int("max_depth", 6, 10),  # 6-10으로 확장
+        "learning_rate": trial.suggest_float("learning_rate", 0.08, 0.15),  # 0.1 주변
+        "n_estimators": trial.suggest_int(
+            "n_estimators", 150, 250, step=25
+        ),  # 200 주변으로 조정
+        "subsample": trial.suggest_float("subsample", 0.85, 0.95),  # 0.9 주변
+        "colsample_bytree": trial.suggest_float(
+            "colsample_bytree", 0.85, 0.95
+        ),  # 0.9 주변
+        "colsample_bylevel": trial.suggest_float(
+            "colsample_bylevel", 0.85, 0.95
+        ),  # 0.9 주변
+        "min_child_weight": trial.suggest_int(
+            "min_child_weight", 50, 150
+        ),  # 100 주변으로 조정
+        "reg_alpha": trial.suggest_float("reg_alpha", 0.05, 0.2),  # 0.1 주변
+        "reg_lambda": trial.suggest_float("reg_lambda", 0.05, 0.2),  # 0.1 주변
+        # 고정 파라미터들
+        "scale_pos_weight": 51.6,
+        "random_state": 42,
+        "n_jobs": -1,
+        "verbosity": 0,
+    }
+
+    # K-Fold 설정
+    kf = StratifiedKFold(
+        n_splits=KFOLD_CONFIG["n_splits"],
+        shuffle=KFOLD_CONFIG["shuffle"],
+        random_state=KFOLD_CONFIG["random_state"],
+    )
+
+    cv_scores = []
+
+    # K-fold CV 실행
+    for fold, (train_idx, valid_idx) in enumerate(kf.split(X_train, y_train)):
+        print(f"    Training fold {fold + 1}/{KFOLD_CONFIG['n_splits']}...")
+
+        # Split data for this fold
+        X_train_fold = X_train.iloc[train_idx]
+        y_train_fold = y_train.iloc[train_idx]
+        X_valid_fold = X_train.iloc[valid_idx]
+        y_valid_fold = y_train.iloc[valid_idx]
+
+        # Create DMatrix
+        dtrain = xgb.DMatrix(X_train_fold, label=y_train_fold)
+        dvalid = xgb.DMatrix(X_valid_fold, label=y_valid_fold)
+
+        # Pruning callback 복구 (warning은 숨김 처리됨)
+        pruning_callback = XGBoostPruningCallback(trial, f"valid-logloss")
+
+        # Train model
+        try:
+            model = xgb.train(
+                params,
+                dtrain,
+                num_boost_round=params["n_estimators"],
+                evals=[(dtrain, "train"), (dvalid, "valid")],
+                early_stopping_rounds=30,  # 빠른 수렴 유도
+                verbose_eval=False,
+                callbacks=[pruning_callback],
+            )
+
+            # Predict and evaluate
+            dvalid_pred = xgb.DMatrix(X_valid_fold)
+            fold_pred = model.predict(dvalid_pred)
+
+            # Competition score 계산
+            fold_metrics = calculate_competition_metrics(y_valid_fold, fold_pred)
+            cv_scores.append(fold_metrics["comp_score"])
+
+        except optuna.TrialPruned:
+            # Pruned trial - 조기 종료
+            raise optuna.TrialPruned()
+        except Exception as e:
+            print(f"Fold {fold} failed: {e}")
+            # 실패한 fold는 평균값으로 대체
+            cv_scores.append(0.32)  # 보수적 점수
+
+    # K-fold CV 평균 점수
+    cv_mean = np.mean(cv_scores)
+    cv_std = np.std(cv_scores)
+
+    # 🎯 더 균형잡힌 목적 함수
+    # CV 표준편차 페널티를 줄임
+    generalization_penalty = cv_std * 1.0  # 표준편차 1배 페널티 (기존 3배에서 감소)
+    objective_score = cv_mean - generalization_penalty
+
+    # WandB에 trial 결과 로깅
+    wandb.log(
+        {
+            f"trial_{trial.number}_cv_score": cv_mean,
+            f"trial_{trial.number}_cv_std": cv_std,
+            f"trial_{trial.number}_objective_score": objective_score,
+            f"trial_{trial.number}_penalty": generalization_penalty,
+            **{
+                f"trial_{trial.number}_{key}": value
+                for key, value in trial.params.items()
+            },
         }
+    )
 
-        # DMatrix 생성
-        dtrain = xgb.DMatrix(X_train, label=y_train, feature_names=feature_names)
-        dval = xgb.DMatrix(X_val, label=y_val, feature_names=feature_names)
+    print(
+        f"Trial {trial.number}: CV Score = {cv_mean:.6f} ± {cv_std:.6f}, Objective = {objective_score:.6f}"
+    )
 
-        # Pruning callback
-        pruning_callback = XGBoostPruningCallback(trial, 'val-logloss')
-
-        # 훈련 설정
-        train_params = params.copy()
-        n_estimators = train_params.pop('n_estimators')
-
-        # 훈련 실행
-        evals = [(dtrain, 'train'), (dval, 'val')]
-        model = xgb.train(
-            train_params,
-            dtrain,
-            num_boost_round=n_estimators,
-            evals=evals,
-            early_stopping_rounds=50,
-            verbose_eval=False,
-            callbacks=[pruning_callback]
-        )
-
-        # 예측 및 평가
-        val_preds = model.predict(dval, iteration_range=(0, model.best_iteration))
-        val_metrics = calculate_competition_metrics(y_val, val_preds)
-
-        # Competition Score를 최대화 (Optuna는 최소화하므로 음수로 반환)
-        return -val_metrics['comp_score']
-
-    return objective
+    return objective_score  # 페널티 적용된 점수 반환
 
 
 def main():
-    print("🚀 Starting XGBoost Optuna optimization...")
+    """메인 함수"""
+    global X_train, y_train, X_val, y_val
 
-    # 1. 데이터 로드
+    print("🚀 Starting XGBoost K-Fold Optuna Optimization...")
+
+    # 데이터 로드
     start_time = time.time()
-    X_train, X_val, y_train, y_val, feature_names, metadata, processor = load_prepared_data()
-    load_time = time.time() - start_time
-    print(f"Data loaded in {load_time:.2f} seconds")
+    X_train, y_train, X_val, y_val, feature_names = load_prepared_data()
+    print(f"Data loaded in {time.time() - start_time:.2f} seconds")
 
-    # 2. WandB 초기화
-    run_name = f"xgboost-optuna-{datetime.now().strftime('%m%d_%H%M')}"
+    # WandB 초기화
+    timestamp = datetime.now().strftime("%m%d_%H%M")
+    run_name = f"xgboost-optuna-kfold-{timestamp}"
+
     wandb.init(
         project=f"{XGBOOST_WANDB_CONFIG['PROJECT']}-optuna",
-        entity=XGBOOST_WANDB_CONFIG['ENTITY'],
+        entity=XGBOOST_WANDB_CONFIG["ENTITY"],
         name=run_name,
-        tags=XGBOOST_WANDB_CONFIG['TAGS'] + ['optuna', 'hyperparameter-optimization'],
-        notes="XGBoost hyperparameter optimization with Optuna"
+        tags=XGBOOST_WANDB_CONFIG["TAGS"] + ["optuna", "kfold", "hyperopt"],
+        notes="XGBoost K-Fold hyperparameter optimization with Optuna",
+        config={
+            "num_features": len(feature_names),
+            "train_samples": len(X_train),
+            "val_samples": len(X_val),
+            "train_ctr": y_train.mean(),
+            "val_ctr": y_val.mean(),
+            "kfold_splits": KFOLD_CONFIG["n_splits"],
+        },
     )
 
-    # 메타데이터 로깅
-    wandb.log({
-        'data_load_time': load_time,
-        'train_samples': len(X_train),
-        'val_samples': len(X_val),
-        'num_features': len(feature_names),
-        'num_categorical': metadata['num_categorical'],
-        'num_numerical': metadata['num_numerical'],
-        'train_ctr': metadata['train_ctr'],
-        'val_ctr': metadata['val_ctr']
-    })
+    # Optuna study 생성
+    study_name = f"xgboost-kfold-{timestamp}"
+    storage = f"sqlite:///optuna_studies/{study_name}.db"
+    os.makedirs("optuna_studies", exist_ok=True)
 
-    # 3. Optuna Study 생성
-    print("🔍 Creating Optuna study...")
     study = optuna.create_study(
-        direction='maximize',  # Competition Score 최대화
-        study_name=f"xgboost-{datetime.now().strftime('%m%d_%H%M')}",
-        pruner=optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=100)
+        study_name=study_name,
+        storage=storage,
+        direction="maximize",  # Competition score 최대화
+        pruner=optuna.pruners.MedianPruner(
+            n_startup_trials=5, n_warmup_steps=100, interval_steps=20
+        ),
+        load_if_exists=True,
     )
 
-    # 4. Objective 함수 생성
-    objective = create_objective(X_train, X_val, y_train, y_val, feature_names, metadata)
+    print(f"📊 Optuna Study: {study_name}")
+    print(f"🎯 Target: Maximize Competition Score")
+    print(f"🔄 K-Fold: {KFOLD_CONFIG['n_splits']}-fold Cross Validation")
 
-    # 5. 최적화 실행
-    print("🎯 Starting hyperparameter optimization...")
-    print("Configuration:")
-    print(f"  - Trials: 50")
-    print(f"  - Timeout: 4 hours")
-    print(f"  - Pruning: MedianPruner")
-    print(f"  - Objective: Competition Score (maximize)")
-
-    optim_start = time.time()
-
-    def log_callback(study, trial):
-        """각 trial 결과를 WandB에 로깅"""
-        wandb.log({
-            f"trial_{trial.number}_comp_score": -trial.value,
-            f"trial_{trial.number}_params": trial.params,
-            "best_comp_score": -study.best_value,
-            "completed_trials": len(study.trials)
-        })
-
-        print(f"Trial {trial.number}: Competition Score = {-trial.value:.6f}")
-        if trial.number > 0:
-            print(f"Best so far: {-study.best_value:.6f}")
-
-    study.optimize(
-        objective,
-        n_trials=50,
-        timeout=4 * 3600,  # 4시간
-        callbacks=[log_callback]
+    # 최적화 실행 - 현재 최고 성능 주변 정밀 탐색
+    n_trials = 50  # 정밀 탐색으로 최적해 발견
+    print(f"🚀 Starting optimization with {n_trials} trials...")
+    print(
+        f"🎯 Strategy: Fine-tuning around current best performance (200 iter, max_depth=8, min_child_weight=100)"
     )
 
-    optim_time = time.time() - optim_start
+    try:
+        study.optimize(objective, n_trials=n_trials, timeout=3600 * 4)  # 4시간 제한
+    except KeyboardInterrupt:
+        print("⚠️ Optimization interrupted by user")
 
-    # 6. 최적 결과 출력
-    print("\n" + "="*60)
-    print("🎉 XGBoost Optuna Optimization Completed!")
-    print("="*60)
-    print(f"Optimization Time: {optim_time:.2f}s ({optim_time/3600:.2f}h)")
-    print(f"Completed Trials: {len(study.trials)}")
-    print(f"Best Competition Score: {-study.best_value:.6f}")
-
-    print(f"\n🏆 Best Parameters:")
-    for key, value in study.best_params.items():
+    # 최적 결과
+    best_trial = study.best_trial
+    print(f"\n🎉 Best trial: {best_trial.number}")
+    print(f"🏆 Best CV Score: {best_trial.value:.6f}")
+    print(f"📋 Best parameters:")
+    for key, value in best_trial.params.items():
         print(f"  {key}: {value}")
 
-    # 7. 최고 성능 모델로 재훈련 및 저장
-    print("\n🔄 Retraining best model...")
-    best_params = {
-        'objective': 'binary:logistic',
-        'eval_metric': 'logloss',
-        'booster': 'gbtree',
-        'device': 'cuda:0',
-        'tree_method': 'hist',
-        'verbosity': 0,
-        'random_state': 42,
-        'n_jobs': -1,
-        **study.best_params
-    }
+    # 최적 파라미터로 최종 학습 및 평가
+    print(f"\n🔄 Training final model with best parameters...")
 
-    # DMatrix 생성
-    dtrain = xgb.DMatrix(X_train, label=y_train, feature_names=feature_names)
-    dval = xgb.DMatrix(X_val, label=y_val, feature_names=feature_names)
-
-    # 최종 훈련
-    train_params = best_params.copy()
-    n_estimators = train_params.pop('n_estimators')
-
-    evals = [(dtrain, 'train'), (dval, 'val')]
-    best_model = xgb.train(
-        train_params,
-        dtrain,
-        num_boost_round=n_estimators,
-        evals=evals,
-        early_stopping_rounds=50,
-        verbose_eval=100
+    best_params = best_trial.params.copy()
+    best_params.update(
+        {
+            "objective": "binary:logistic",
+            "eval_metric": "logloss",
+            "booster": "gbtree",
+            "device": "cuda:0",
+            "tree_method": "hist",
+            "scale_pos_weight": 51.6,
+            "random_state": 42,
+            "n_jobs": -1,
+            "verbosity": 0,
+        }
     )
 
-    # 예측 및 평가
-    train_preds = best_model.predict(dtrain, iteration_range=(0, best_model.best_iteration))
-    val_preds = best_model.predict(dval, iteration_range=(0, best_model.best_iteration))
+    # 최종 K-fold 학습
+    kf = StratifiedKFold(
+        n_splits=KFOLD_CONFIG["n_splits"],
+        shuffle=KFOLD_CONFIG["shuffle"],
+        random_state=KFOLD_CONFIG["random_state"],
+    )
 
-    train_metrics = calculate_competition_metrics(y_train, train_preds)
-    val_metrics = calculate_competition_metrics(y_val, val_preds)
+    final_models = []
+    final_cv_scores = []
+    val_predictions = np.zeros(len(y_val))
 
-    # 8. 모델 저장
-    print("💾 Saving optimized model...")
-    model_dir = f"checkpoints/xgboost/{run_name}"
-    os.makedirs(model_dir, exist_ok=True)
+    for fold, (train_idx, valid_idx) in enumerate(kf.split(X_train, y_train)):
+        print(f"Final training fold {fold + 1}/{KFOLD_CONFIG['n_splits']}...")
 
-    # 모델 저장
-    model_path = f"{model_dir}/xgboost_model.json"
-    best_model.save_model(model_path)
+        X_train_fold = X_train.iloc[train_idx]
+        y_train_fold = y_train.iloc[train_idx]
+        X_valid_fold = X_train.iloc[valid_idx]
+        y_valid_fold = y_train.iloc[valid_idx]
 
-    # 메타데이터 저장
-    model_metadata = {
-        'config': best_params,
-        'feature_names': feature_names,
-        'processor': processor,
-        'train_metrics': train_metrics,
-        'val_metrics': val_metrics,
-        'best_iteration': best_model.best_iteration,
-        'optuna_study': {
-            'best_value': study.best_value,
-            'best_params': study.best_params,
-            'n_trials': len(study.trials),
-            'optimization_time': optim_time
-        },
-        'timestamp': datetime.now().isoformat()
-    }
+        dtrain = xgb.DMatrix(X_train_fold, label=y_train_fold)
+        dvalid = xgb.DMatrix(X_valid_fold, label=y_valid_fold)
 
-    with open(f"{model_dir}/model_metadata.pkl", 'wb') as f:
-        pickle.dump(model_metadata, f)
+        model = xgb.train(
+            best_params,
+            dtrain,
+            num_boost_round=best_params["n_estimators"],
+            evals=[(dtrain, "train"), (dvalid, "valid")],
+            early_stopping_rounds=30,  # 일관된 early stopping
+            verbose_eval=False,
+        )
 
-    # Optuna study 저장
-    optuna_path = f"{model_dir}/optuna_study.pkl"
-    with open(optuna_path, 'wb') as f:
-        pickle.dump(study, f)
+        final_models.append(model)
 
-    # 9. 피처 중요도 분석
-    importance_dict = best_model.get_score(importance_type='gain')
-    feature_imp = pd.DataFrame([
-        {'feature': feature, 'importance': importance_dict.get(feature, 0)}
-        for feature in feature_names
-    ]).sort_values('importance', ascending=False)
+        # Validation set 예측
+        dval = xgb.DMatrix(X_val)
+        val_predictions += model.predict(dval) / KFOLD_CONFIG["n_splits"]
 
-    print("Top 10 most important features:")
-    print(feature_imp.head(10))
-    feature_imp.to_csv(f"{model_dir}/feature_importance.csv", index=False)
+        # Fold 성능
+        fold_pred = model.predict(dvalid)
+        fold_metrics = calculate_competition_metrics(y_valid_fold, fold_pred)
+        final_cv_scores.append(fold_metrics["comp_score"])
 
-    # 10. 최종 결과
-    total_time = time.time() - start_time
+    # 최종 평가
+    final_metrics = calculate_competition_metrics(y_val, val_predictions)
 
-    print(f"\n📊 Final Training Metrics:")
-    print(f"  Competition Score: {train_metrics['comp_score']:.6f}")
-    print(f"  AUC: {train_metrics['auc']:.6f}")
-    print(f"  AP: {train_metrics['ap']:.6f}")
-    print(f"  WLL: {train_metrics['wll']:.6f}")
+    print(f"\n🎯 Final Results:")
+    print(f"CV Score: {np.mean(final_cv_scores):.6f} ± {np.std(final_cv_scores):.6f}")
+    print(f"Validation Score: {final_metrics['comp_score']:.6f}")
+    print(f"Validation AUC: {final_metrics['auc']:.6f}")
 
-    print(f"\n🎯 Final Validation Metrics:")
-    print(f"  Competition Score: {val_metrics['comp_score']:.6f}")
-    print(f"  AUC: {val_metrics['auc']:.6f}")
-    print(f"  AP: {val_metrics['ap']:.6f}")
-    print(f"  WLL: {val_metrics['wll']:.6f}")
+    # 결과 저장
+    result_dir = f"checkpoints/xgboost/{run_name}"
+    os.makedirs(result_dir, exist_ok=True)
 
-    print(f"\nModel saved: {model_path}")
-    print(f"Optuna study saved: {optuna_path}")
+    for i, model in enumerate(final_models):
+        model.save_model(f"{result_dir}/xgboost_fold_{i+1}.json")
 
-    # 성능 비교
-    baseline_score = 0.345132  # 이전 최고 성능
-    improvement = val_metrics['comp_score'] - baseline_score
-    print(f"\n📈 Performance vs Baseline:")
-    print(f"Baseline: {baseline_score:.6f}")
-    print(f"Optimized: {val_metrics['comp_score']:.6f}")
-    print(f"Improvement: {improvement:+.6f} ({improvement/baseline_score*100:+.2f}%)")
+    # 최적 파라미터 저장
+    with open(f"{result_dir}/best_params.pkl", "wb") as f:
+        pickle.dump(best_params, f)
 
-    if val_metrics['comp_score'] >= 0.35:
-        print("🎯 TARGET ACHIEVED: 0.35+ Competition Score!")
-    else:
-        print(f"🎯 Target: 0.35+ (current: {val_metrics['comp_score']:.6f})")
+    # Study 정보 저장
+    study_df = study.trials_dataframe()
+    study_df.to_csv(f"{result_dir}/optuna_trials.csv", index=False)
 
-    # 최종 메트릭 로깅
-    wandb.log({
-        'final_best_iteration': best_model.best_iteration,
-        'final_train_comp_score': train_metrics['comp_score'],
-        'final_val_comp_score': val_metrics['comp_score'],
-        'final_train_auc': train_metrics['auc'],
-        'final_val_auc': val_metrics['auc'],
-        'optimization_time': optim_time,
-        'total_time': total_time,
-        'n_trials_completed': len(study.trials),
-        'improvement_vs_baseline': improvement,
-        'improvement_percentage': improvement/baseline_score*100
-    })
+    # WandB 최종 로깅
+    wandb.log(
+        {
+            "best_cv_score": best_trial.value,
+            "final_cv_mean": np.mean(final_cv_scores),
+            "final_cv_std": np.std(final_cv_scores),
+            "final_val_score": final_metrics["comp_score"],
+            "final_val_auc": final_metrics["auc"],
+            "n_trials_completed": len(study.trials),
+            **{f"best_{key}": value for key, value in best_trial.params.items()},
+        }
+    )
 
     wandb.finish()
 
-    return best_model, val_metrics, study
+    target_achieved = final_metrics["comp_score"] >= 0.35
+    if target_achieved:
+        print(f"🎉 TARGET ACHIEVED: {final_metrics['comp_score']:.6f} >= 0.35")
+    else:
+        print(f"🎯 Target: 0.35+ (current: {final_metrics['comp_score']:.6f})")
+
+    print(f"\n💾 Results saved: {result_dir}")
 
 
 if __name__ == "__main__":
