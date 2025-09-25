@@ -86,17 +86,22 @@ class OptimizedDataLoader:
 def train_and_validate(trial, processor, device):
     """하나의 trial을 위한 훈련 및 검증"""
 
+    # Hidden units 매핑
+    hidden_units_options = {
+        0: [256, 128],
+        1: [512, 256, 128],
+        2: [512, 256, 128, 64],
+        3: [768, 512, 256],
+        4: [768, 512, 256, 128],
+        5: [1024, 512, 256],
+    }
+
     # 하이퍼파라미터 제안
+    hidden_units_idx = trial.suggest_categorical('hidden_units_idx', [0, 1, 2, 3, 4, 5])
+
     params = {
         'embedding_dim': trial.suggest_categorical('embedding_dim', [16, 24, 32, 48, 64]),
-        'hidden_units': trial.suggest_categorical('hidden_units', [
-            [256, 128],
-            [512, 256, 128],
-            [512, 256, 128, 64],
-            [768, 512, 256],
-            [768, 512, 256, 128],
-            [1024, 512, 256],
-        ]),
+        'hidden_units': hidden_units_options[hidden_units_idx],
         'dropout': trial.suggest_float('dropout', 0.1, 0.5, step=0.1),
         'learning_rate': trial.suggest_float('learning_rate', 1e-4, 5e-3, log=True),
         'batch_size': trial.suggest_categorical('batch_size', [1024, 2048, 4096]),
@@ -141,7 +146,7 @@ def train_and_validate(trial, processor, device):
         weight_decay=params['weight_decay']
     )
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, patience=3, factor=0.7, verbose=False
+        optimizer, patience=3, factor=0.7
     )
 
     # 조기 종료 설정
