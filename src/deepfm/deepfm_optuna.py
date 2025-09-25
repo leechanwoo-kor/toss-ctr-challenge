@@ -20,7 +20,7 @@ from tqdm import tqdm
 import optuna
 import wandb
 
-from ..models.deepfm_core import DeepFM
+from ..models.deepfm_optimized import OptimizedDeepFM
 from ..utils.metrics import calculate_competition_metrics
 from ..utils.config import WANDB_CONFIG
 
@@ -74,15 +74,19 @@ def train_epoch(model, dataloader, criterion, optimizer, device):
     total_loss = 0
     num_batches = 0
 
-    for categorical_inputs, numerical_inputs, targets in dataloader:
+    for batch_categorical, batch_numerical, batch_targets in dataloader:
         # GPU로 이동
-        categorical_inputs = {k: v.to(device, non_blocking=True) for k, v in categorical_inputs.items()}
-        numerical_inputs = numerical_inputs.to(device, non_blocking=True)
-        targets = targets.to(device, non_blocking=True)
+        for key in batch_categorical:
+            batch_categorical[key] = batch_categorical[key].to(device)
+
+        if batch_numerical is not None:
+            batch_numerical = batch_numerical.to(device)
+
+        batch_targets = batch_targets.to(device).float()
 
         # 순전파
-        outputs = model(categorical_inputs, numerical_inputs)
-        loss = criterion(outputs, targets.float())
+        outputs = model(batch_categorical, batch_numerical)
+        loss = criterion(outputs.squeeze(), batch_targets)
 
         # 역전파
         optimizer.zero_grad()
@@ -102,17 +106,21 @@ def validate(model, dataloader, device):
     all_targets = []
 
     with torch.no_grad():
-        for categorical_inputs, numerical_inputs, targets in dataloader:
+        for batch_categorical, batch_numerical, batch_targets in dataloader:
             # GPU로 이동
-            categorical_inputs = {k: v.to(device, non_blocking=True) for k, v in categorical_inputs.items()}
-            numerical_inputs = numerical_inputs.to(device, non_blocking=True)
-            targets = targets.to(device, non_blocking=True)
+            for key in batch_categorical:
+                batch_categorical[key] = batch_categorical[key].to(device)
+
+            if batch_numerical is not None:
+                batch_numerical = batch_numerical.to(device)
+
+            batch_targets = batch_targets.to(device).float()
 
             # 예측
-            outputs = model(categorical_inputs, numerical_inputs)
+            outputs = model(batch_categorical, batch_numerical)
 
-            all_preds.extend(torch.sigmoid(outputs).cpu().numpy())
-            all_targets.extend(targets.cpu().numpy())
+            all_preds.extend(torch.sigmoid(outputs.squeeze()).cpu().numpy())
+            all_targets.extend(batch_targets.cpu().numpy())
 
     predictions = np.array(all_preds)
     targets = np.array(all_targets)
@@ -212,12 +220,12 @@ def objective(trial):
         )
 
         # 모델 초기화
-        model = DeepFM(
-            feature_dims=metadata['feature_dims'],
-            embedding_dim=params['EMBEDDING_DIM'],
+        model = OptimizedDeepFM(
+            feature_dims=metadata['categorical_feature_dims'],
+            default_embedding_dim=params['EMBEDDING_DIM'],
             hidden_units=params['HIDDEN_UNITS'],
             dropout=params['DROPOUT'],
-            num_numerical=metadata['num_numerical']
+            num_numerical=len(metadata['numerical_features'])
         ).to(device)
 
         # 옵티마이저 및 손실함수 (Focal Loss 적용)

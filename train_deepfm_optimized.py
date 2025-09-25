@@ -1,0 +1,374 @@
+"""
+inventory_id embedding 10차원으로 최적화된 DeepFM 훈련
+"""
+
+import os
+import sys
+import time
+import random
+import numpy as np
+import pandas as pd
+import pickle
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import wandb
+from datetime import datetime
+
+# Add project root to path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from src.models.deepfm_optimized import OptimizedDeepFM
+from src.utils.config import DEEPFM_CONFIG, WANDB_CONFIG
+from src.utils.metrics import calculate_competition_metrics
+
+def seed_everything(seed):
+    """모든 랜덤 시드 고정"""
+    random.seed(seed)
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+class ExactDataLoader:
+    """Exact DeepFM 데이터 전용 로더"""
+
+    def __init__(self, data_path, batch_size=4096, shuffle=True, seed=42):
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        self.seed = seed
+
+        # 수동으로 저장된 데이터 로드
+        data = torch.load(data_path, weights_only=False)
+
+        self.categorical_data = data['categorical']
+        self.numerical_data = data['numerical']
+        self.targets = data['targets']
+
+        self.num_samples = len(self.targets)
+        print(f"   Loaded {self.num_samples:,} samples")
+
+    def __iter__(self):
+        if self.shuffle:
+            # 시드 고정으로 재현 가능한 셔플링
+            generator = torch.Generator()
+            generator.manual_seed(self.seed)
+            indices = torch.randperm(self.num_samples, generator=generator)
+        else:
+            indices = torch.arange(self.num_samples)
+
+        for start_idx in range(0, self.num_samples, self.batch_size):
+            end_idx = min(start_idx + self.batch_size, self.num_samples)
+            batch_indices = indices[start_idx:end_idx]
+
+            # categorical batch
+            batch_categorical = {}
+            for col, data in self.categorical_data.items():
+                batch_categorical[col] = data[batch_indices]
+
+            # numerical batch
+            batch_numerical = None
+            if self.numerical_data is not None:
+                batch_numerical = self.numerical_data[batch_indices]
+
+            # targets batch
+            batch_targets = self.targets[batch_indices]
+
+            yield batch_categorical, batch_numerical, batch_targets
+
+    def __len__(self):
+        return (self.num_samples + self.batch_size - 1) // self.batch_size
+
+def train_epoch(model, train_loader, criterion, optimizer, device):
+    """한 에포크 훈련"""
+    model.train()
+    total_loss = 0
+    total_samples = 0
+    batch_count = 0
+
+    for batch_categorical, batch_numerical, batch_targets in train_loader:
+        batch_count += 1
+
+        # GPU로 이동
+        for key in batch_categorical:
+            batch_categorical[key] = batch_categorical[key].to(device)
+
+        if batch_numerical is not None:
+            batch_numerical = batch_numerical.to(device)
+
+        batch_targets = batch_targets.to(device).float()
+
+        # 순전파
+        optimizer.zero_grad()
+        outputs = model(batch_categorical, batch_numerical)
+        loss = criterion(outputs.squeeze(), batch_targets)
+
+        # 역전파
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        optimizer.step()
+
+        total_loss += loss.item() * len(batch_targets)
+        total_samples += len(batch_targets)
+
+        if batch_count % 1000 == 0:
+            print(f"     Batch {batch_count}: loss = {loss.item():.6f}")
+
+    return total_loss / total_samples
+
+def validate_epoch(model, val_loader, criterion, device):
+    """검증"""
+    model.eval()
+    total_loss = 0
+    total_samples = 0
+    all_predictions = []
+    all_targets = []
+
+    with torch.no_grad():
+        for batch_categorical, batch_numerical, batch_targets in val_loader:
+            # GPU로 이동
+            for key in batch_categorical:
+                batch_categorical[key] = batch_categorical[key].to(device)
+
+            if batch_numerical is not None:
+                batch_numerical = batch_numerical.to(device)
+
+            batch_targets = batch_targets.to(device).float()
+
+            # 순전파
+            outputs = model(batch_categorical, batch_numerical)
+            loss = criterion(outputs.squeeze(), batch_targets)
+
+            total_loss += loss.item() * len(batch_targets)
+            total_samples += len(batch_targets)
+
+            # 예측값과 실제값 수집
+            predictions = torch.sigmoid(outputs.squeeze()).cpu().numpy()
+            targets_np = batch_targets.cpu().numpy()
+
+            all_predictions.extend(predictions)
+            all_targets.extend(targets_np)
+
+    # 메트릭 계산
+    all_predictions = np.array(all_predictions)
+    all_targets = np.array(all_targets)
+
+    metrics = calculate_competition_metrics(all_targets, all_predictions)
+    avg_loss = total_loss / total_samples
+
+    return avg_loss, metrics, all_predictions, all_targets
+
+def main():
+    print("Optimized DeepFM Training (inventory_id: 10D)")
+    print("   Goal: Reduce embedding dimension for better generalization")
+    print("   inventory_id: 10D, others: 16D")
+
+    # 시드 고정
+    seed = DEEPFM_CONFIG.get('SEED', 42)
+    seed_everything(seed)
+    print(f"Seed fixed: {seed}")
+
+    start_time = time.time()
+
+    # 1. 메타데이터 로드
+    print("\nLoading exact DeepFM data...")
+    with open('data/processed/deepfm_exact/metadata.pkl', 'rb') as f:
+        metadata = pickle.load(f)
+
+    print(f"   Features: {metadata['data_shape']['features']}")
+    print(f"   inventory_id categories: {metadata['categorical_feature_dims']['inventory_id']}")
+
+    # 2. 최적화된 모델 생성
+    print("\nCreating optimized DeepFM model...")
+    feature_dims = metadata['categorical_feature_dims']
+    num_numerical_features = len(metadata['numerical_features'])
+
+    model = OptimizedDeepFM(
+        feature_dims=feature_dims,
+        default_embedding_dim=16,
+        hidden_units=[256, 128],
+        dropout=0.2,
+        num_numerical=num_numerical_features
+    )
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model = model.to(device)
+
+    # 파라미터 수 비교
+    total_params = sum(p.numel() for p in model.parameters())
+    inventory_params = model.fm_embeddings['inventory_id'].weight.numel()
+
+    print(f"   Model on: {device}")
+    print(f"   Total parameters: {total_params:,}")
+    print(f"   inventory_id params: {inventory_params:,} (10D vs 16D)")
+
+    # 3. 데이터 로더
+    batch_size = DEEPFM_CONFIG.get('BATCH_SIZE', 1024)
+    print(f"\nCreating data loaders (batch size: {batch_size})...")
+
+    train_loader = ExactDataLoader('data/processed/deepfm_exact/train_dataset.pt',
+                                   batch_size=batch_size, shuffle=True, seed=seed)
+    val_loader = ExactDataLoader('data/processed/deepfm_exact/val_dataset.pt',
+                                 batch_size=batch_size, shuffle=False, seed=seed)
+
+    print(f"   Train batches: {len(train_loader)}")
+    print(f"   Val batches: {len(val_loader)}")
+
+    # 4. 훈련 설정
+    learning_rate = DEEPFM_CONFIG.get('LEARNING_RATE', 0.001)
+    num_epochs = DEEPFM_CONFIG.get('EPOCHS', 30)
+    weight_decay = DEEPFM_CONFIG.get('WEIGHT_DECAY', 1e-5)
+    pos_weight = DEEPFM_CONFIG.get('POS_WEIGHT', 51.6)
+    early_stopping_patience = DEEPFM_CONFIG.get('EARLY_STOPPING', 5)
+
+    pos_weight_tensor = torch.tensor([pos_weight]).to(device)
+    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight_tensor)
+    optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=5, factor=0.5)
+
+    print(f"\nTraining configuration:")
+    print(f"   Learning rate: {learning_rate}")
+    print(f"   Pos weight: {pos_weight}")
+    print(f"   Epochs: {num_epochs}")
+    print(f"   Early stopping: {early_stopping_patience}")
+
+    # 5. WandB 초기화
+    run_name = f'deepfm-optimized-{datetime.now().strftime("%m%d_%H%M")}'
+    wandb.init(
+        project=WANDB_CONFIG['PROJECT'],
+        entity=WANDB_CONFIG.get('ENTITY', 'leechanwoo'),
+        name=run_name,
+        tags=['deepfm', 'optimized', 'inventory-10d', 'embedding-optimization']
+    )
+
+    wandb.config.update({
+        **DEEPFM_CONFIG,
+        'model_type': 'OptimizedDeepFM',
+        'inventory_embedding_dim': 10,
+        'other_embedding_dim': 16,
+        'optimization_target': 'inventory_id_embedding',
+        'total_params': total_params
+    })
+
+    # 6. 훈련 루프
+    print(f"\nStarting training: {num_epochs} epochs")
+    print("   Baseline to beat: 0.351327 (16D)")
+
+    best_val_score = 0
+    best_epoch = 0
+    patience_counter = 0
+    training_start_time = time.time()
+
+    for epoch in range(num_epochs):
+        epoch_start_time = time.time()
+        print(f"\nEpoch {epoch+1}/{num_epochs}")
+
+        # 훈련
+        train_loss = train_epoch(model, train_loader, criterion, optimizer, device)
+
+        # 검증
+        val_loss, val_metrics, val_predictions, val_targets = validate_epoch(
+            model, val_loader, criterion, device
+        )
+
+        scheduler.step(val_loss)
+        epoch_time = time.time() - epoch_start_time
+
+        # 결과 출력
+        print(f"   Train Loss: {train_loss:.6f}")
+        print(f"   Val Loss: {val_loss:.6f}")
+        print(f"   Competition Score: {val_metrics['comp_score']:.6f}")
+        print(f"   AUC: {val_metrics['auc']:.6f}")
+        print(f"   vs Baseline (16D): {val_metrics['comp_score'] - 0.351327:+.6f}")
+        print(f"   Epoch Time: {epoch_time:.2f}s")
+
+        # WandB 로깅
+        wandb.log({
+            'epoch': epoch + 1,
+            'train_loss': train_loss,
+            'val_loss': val_loss,
+            'val_comp_score': val_metrics['comp_score'],
+            'val_auc': val_metrics['auc'],
+            'val_ap': val_metrics['ap'],
+            'val_wll': val_metrics['wll'],
+            'vs_baseline_16d': val_metrics['comp_score'] - 0.351327,
+            'learning_rate': optimizer.param_groups[0]['lr'],
+            'epoch_time': epoch_time
+        })
+
+        # 최고 성능 모델 저장
+        if val_metrics['comp_score'] > best_val_score:
+            best_val_score = val_metrics['comp_score']
+            best_epoch = epoch
+            patience_counter = 0
+
+            # 모델 저장
+            checkpoint_dir = f'checkpoints/deepfm_optimized/{run_name}'
+            os.makedirs(checkpoint_dir, exist_ok=True)
+            torch.save(model.state_dict(), f'{checkpoint_dir}/best_model.pth')
+
+            print(f"   New best model saved! Score: {best_val_score:.6f}")
+        else:
+            patience_counter += 1
+
+        # Early stopping
+        if patience_counter >= early_stopping_patience:
+            print(f"\nEarly stopping triggered after {epoch + 1} epochs")
+            break
+
+    training_time = time.time() - training_start_time
+    total_time = time.time() - start_time
+
+    # 7. 최종 결과
+    print("\n" + "="*70)
+    print("Optimized DeepFM Training Completed!")
+    print("="*70)
+    print(f"Final Results:")
+    print(f"   Best Epoch: {best_epoch + 1}")
+    print(f"   Best Competition Score: {best_val_score:.6f}")
+    print(f"   Training Time: {training_time:.2f}s")
+
+    # 비교 분석
+    baseline_score = 0.351327
+    improvement = best_val_score - baseline_score
+
+    print(f"\nOptimization Results:")
+    print(f"   Baseline (16D): {baseline_score:.6f}")
+    print(f"   Optimized (10D): {best_val_score:.6f}")
+    print(f"   Improvement: {improvement:+.6f}")
+    print(f"   Parameter reduction: inventory_id {19*16} -> {19*10} ({(19*6)/(19*16)*100:.1f}% saved)")
+
+    if improvement > 0.001:
+        print("   ✅ Significant improvement! Optimization successful.")
+    elif improvement > 0:
+        print("   🤔 Small improvement. Marginal benefit.")
+    else:
+        print("   ❌ No improvement. Keep original 16D.")
+
+    # WandB 최종 로깅
+    wandb.log({
+        'final_best_score': best_val_score,
+        'final_best_epoch': best_epoch + 1,
+        'total_training_time': training_time,
+        'baseline_16d': baseline_score,
+        'improvement_vs_baseline': improvement,
+        'parameter_reduction_percent': (19*6)/(19*16)*100
+    })
+
+    wandb.finish()
+
+    return best_val_score, improvement
+
+if __name__ == "__main__":
+    try:
+        best_score, improvement = main()
+        print(f"\nTraining completed successfully!")
+        print(f"Best score: {best_score:.6f}")
+        print(f"Improvement: {improvement:+.6f}")
+    except Exception as e:
+        print(f"\nTraining failed: {e}")
+        import traceback
+        traceback.print_exc()

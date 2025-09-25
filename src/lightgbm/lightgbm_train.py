@@ -1,224 +1,299 @@
 """
-LightGBM 훈련 스크립트 (현업 표준 설정)
+LightGBM K-fold 훈련 스크립트 (XGBoost와 동일한 구조)
 """
 
 import os
+import sys
 import time
 import numpy as np
 import pandas as pd
 import pickle
 from datetime import datetime
 import lightgbm as lgb
+from sklearn.model_selection import StratifiedKFold
+from sklearn.metrics import roc_auc_score
 import wandb
 
-from ..utils.metrics import calculate_competition_metrics
-from ..utils.config import LIGHTGBM_CONFIG, LIGHTGBM_WANDB_CONFIG
+# Add project root to path
+sys.path.append(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+)
+
+from src.utils.config import LIGHTGBM_CONFIG, LIGHTGBM_WANDB_CONFIG, KFOLD_CONFIG
+from src.utils.metrics import calculate_competition_metrics
+
+
+# Constants
+DATA_DIR = "data/processed/lightgbm"
+REQUIRED_FILES = [
+    "X_train.npy",
+    "X_val.npy",
+    "y_train.npy",
+    "y_val.npy",
+    "metadata.pkl",
+    "processor.pkl",
+    "feature_names.pkl",
+]
+CHECKPOINT_DIR = "checkpoints/lightgbm"
 
 
 def load_prepared_data():
-    """전처리된 데이터 로드"""
-    print("📁 Loading prepared data...")
-
-    data_dir = 'data/processed/lightgbm'
+    """Load prepared training and validation data"""
+    print("Loading prepared data...")
 
     # 데이터 파일 존재 확인
-    required_files = ['X_train.npy', 'X_val.npy', 'y_train.npy', 'y_val.npy',
-                      'metadata.pkl', 'processor.pkl', 'feature_names.pkl']
-    for file in required_files:
-        if not os.path.exists(os.path.join(data_dir, file)):
-            raise FileNotFoundError(f"Required file not found: {file}. Run 'python -m src.lightgbm.lightgbm_prepare_data' first.")
+    for file in REQUIRED_FILES:
+        if not os.path.exists(os.path.join(DATA_DIR, file)):
+            raise FileNotFoundError(
+                f"Required file not found: {file}. Run 'python -m src.lightgbm.lightgbm_prepare_data' first."
+            )
 
-    # 데이터 로드
-    X_train = np.load(f'{data_dir}/X_train.npy')
-    X_val = np.load(f'{data_dir}/X_val.npy')
-    y_train = np.load(f'{data_dir}/y_train.npy')
-    y_val = np.load(f'{data_dir}/y_val.npy')
+    try:
+        # 피처명 먼저 로드
+        with open(f"{DATA_DIR}/feature_names.pkl", "rb") as f:
+            feature_names = pickle.load(f)
 
-    # 메타데이터 로드
-    with open(f'{data_dir}/metadata.pkl', 'rb') as f:
-        metadata = pickle.load(f)
+        # 데이터를 바로 DataFrame으로 로드 (메모리 효율적)
+        train_X = pd.DataFrame(
+            np.load(f"{DATA_DIR}/X_train.npy"),
+            columns=feature_names
+        )
+        val_X = pd.DataFrame(
+            np.load(f"{DATA_DIR}/X_val.npy"),
+            columns=feature_names
+        )
+        train_y = pd.Series(np.load(f"{DATA_DIR}/y_train.npy"))
+        val_y = pd.Series(np.load(f"{DATA_DIR}/y_val.npy"))
 
-    # 피처명 로드
-    with open(f'{data_dir}/feature_names.pkl', 'rb') as f:
-        feature_names = pickle.load(f)
+    except Exception as e:
+        raise RuntimeError(f"Failed to load prepared data: {e}")
 
-    # 프로세서 로드
-    with open(f'{data_dir}/processor.pkl', 'rb') as f:
-        processor = pickle.load(f)
-
-    print(f"Train: {X_train.shape}, Val: {X_val.shape}")
+    print(f"Train: {train_X.shape}, Val: {val_X.shape}")
     print(f"Features: {len(feature_names)}")
 
-    return X_train, X_val, y_train, y_val, feature_names, metadata, processor
+    return train_X, train_y, val_X, val_y
+
+
+def train_kfold_lightgbm(X, y, val_X, val_y, config, kfold_config):
+    """Train LightGBM with K-Fold Cross Validation"""
+
+    # Initialize K-Fold
+    kf = StratifiedKFold(
+        n_splits=kfold_config["n_splits"],
+        shuffle=kfold_config["shuffle"],
+        random_state=kfold_config["random_state"],
+    )
+
+    models = []
+    fold_scores = []
+    val_predictions = np.zeros(len(val_y))
+    oof_predictions = np.zeros(len(y))
+
+    print(f"Starting {kfold_config['n_splits']}-Fold Cross Validation...")
+
+    for fold, (train_idx, valid_idx) in enumerate(kf.split(X, y)):
+        print(f"\nFold {fold + 1}/{kfold_config['n_splits']}")
+
+        # Split data for this fold
+        X_train_fold = X.iloc[train_idx]
+        y_train_fold = y.iloc[train_idx]
+        X_valid_fold = X.iloc[valid_idx]
+        y_valid_fold = y.iloc[valid_idx]
+
+        # Create LightGBM datasets
+        train_data = lgb.Dataset(X_train_fold, label=y_train_fold)
+        valid_data = lgb.Dataset(X_valid_fold, label=y_valid_fold, reference=train_data)
+
+        # Train model for this fold
+        print(f"Training fold {fold + 1}...")
+
+        model = lgb.train(
+            config,
+            train_data,
+            valid_sets=[train_data, valid_data],
+            valid_names=['train', 'valid'],
+            callbacks=[
+                lgb.log_evaluation(period=50),
+                lgb.early_stopping(stopping_rounds=config["early_stopping_rounds"])
+            ]
+        )
+
+        models.append(model)
+
+        # Predict on validation fold (out-of-fold)
+        fold_pred = model.predict(X_valid_fold, num_iteration=model.best_iteration)
+        oof_predictions[valid_idx] = fold_pred
+
+        # Predict on test set
+        val_predictions += model.predict(val_X, num_iteration=model.best_iteration) / kfold_config["n_splits"]
+
+        # Calculate fold metrics
+        fold_auc = roc_auc_score(y_valid_fold, fold_pred)
+        fold_metrics = calculate_competition_metrics(y_valid_fold, fold_pred)
+        fold_comp_score = fold_metrics["comp_score"]
+
+        fold_scores.append(
+            {"fold": fold + 1, "auc": fold_auc, "comp_score": fold_comp_score}
+        )
+
+        print(f"   Fold {fold + 1} AUC: {fold_auc:.6f}")
+        print(f"   Fold {fold + 1} Competition Score: {fold_comp_score:.6f}")
+
+        # 각 fold 완료 후 WandB에 로깅
+        wandb.log(
+            {
+                "fold_auc": fold_auc,
+                "fold_comp_score": fold_comp_score,
+                "best_iteration": model.best_iteration,
+                "completed_folds": fold + 1,
+                "fold_number": fold + 1,
+            }
+        )
+
+    return models, oof_predictions, val_predictions, fold_scores
 
 
 def main():
-    print("🌳 Starting LightGBM training...")
-
-    # 1. 전처리된 데이터 로드
     start_time = time.time()
-    X_train, X_val, y_train, y_val, feature_names, metadata, processor = load_prepared_data()
-    load_time = time.time() - start_time
-    print(f"Data loaded in {load_time:.2f} seconds")
 
-    # 2. WandB 초기화
-    run_name = f"lightgbm-{datetime.now().strftime('%m%d_%H%M')}"
+    try:
+        print("Starting LightGBM K-Fold training...")
+
+        # Load data
+        data_start = time.time()
+        train_X, train_y, val_X, val_y = load_prepared_data()
+        data_time = time.time() - data_start
+        print(f"Data loaded in {data_time:.2f} seconds")
+    except Exception as e:
+        print(f"Error during data loading: {e}")
+        return
+
+    # Initialize WandB
+    timestamp = datetime.now().strftime("%m%d_%H%M")
+    run_name = f"lightgbm-kfold-{timestamp}"
+
     wandb.init(
-        project=LIGHTGBM_WANDB_CONFIG['PROJECT'],
-        entity=LIGHTGBM_WANDB_CONFIG['ENTITY'],
+        project=LIGHTGBM_WANDB_CONFIG["PROJECT"],
+        entity=LIGHTGBM_WANDB_CONFIG["ENTITY"],
         name=run_name,
-        config={**LIGHTGBM_CONFIG, **metadata['config_used']},
-        tags=LIGHTGBM_WANDB_CONFIG['TAGS'],
-        notes=LIGHTGBM_WANDB_CONFIG['NOTES']
+        tags=LIGHTGBM_WANDB_CONFIG["TAGS"] + ["kfold"],
+        notes="LightGBM with K-Fold Cross Validation",
+        config={
+            **LIGHTGBM_CONFIG,
+            **KFOLD_CONFIG,
+            "data_load_time": data_time,
+            "num_features": train_X.shape[1],
+            "train_samples": len(train_X),
+            "val_samples": len(val_X),
+            "train_ctr": train_y.mean(),
+            "val_ctr": val_y.mean(),
+        },
     )
 
-    # 메타데이터 로깅
-    wandb.log({
-        'data_load_time': load_time,
-        'train_samples': len(X_train),
-        'val_samples': len(X_val),
-        'num_features': len(feature_names),
-        'num_categorical': metadata['num_categorical'],
-        'num_numerical': metadata['num_numerical'],
-        'train_ctr': metadata['train_ctr'],
-        'val_ctr': metadata['val_ctr']
-    })
-
-    # 3. LightGBM 데이터셋 생성
-    print("🔄 Creating LightGBM datasets...")
-    train_data = lgb.Dataset(
-        X_train,
-        label=y_train,
-        feature_name=feature_names,
-        free_raw_data=False
+    # Train K-Fold models
+    train_start = time.time()
+    models, oof_predictions, val_predictions, fold_scores = train_kfold_lightgbm(
+        train_X, train_y, val_X, val_y, LIGHTGBM_CONFIG, KFOLD_CONFIG
     )
+    train_time = time.time() - train_start
 
-    val_data = lgb.Dataset(
-        X_val,
-        label=y_val,
-        feature_name=feature_names,
-        reference=train_data,
-        free_raw_data=False
-    )
+    print("\nEvaluating K-Fold results...")
 
-    # 4. 모델 훈련
-    print("🌳 Training LightGBM model...")
-    print(f"📊 Training config:")
-    for key, value in LIGHTGBM_CONFIG.items():
-        print(f"  {key}: {value}")
-
-    training_start = time.time()
-
-    # 콜백 함수 정의
-    callbacks = [
-        lgb.log_evaluation(period=100),
-        lgb.early_stopping(stopping_rounds=LIGHTGBM_CONFIG['early_stopping_rounds'])
-    ]
-
-    # 훈련 실행
-    model = lgb.train(
-        LIGHTGBM_CONFIG,
-        train_data,
-        valid_sets=[train_data, val_data],
-        valid_names=['train', 'valid'],
-        callbacks=callbacks
-    )
-
-    training_time = time.time() - training_start
-    print(f"Training completed in {training_time:.2f} seconds")
-
-    # 5. 예측 및 평가
-    print("🔮 Generating predictions...")
-    train_preds = model.predict(X_train, num_iteration=model.best_iteration)
-    val_preds = model.predict(X_val, num_iteration=model.best_iteration)
-
-    # 메트릭 계산
-    train_metrics = calculate_competition_metrics(y_train, train_preds)
-    val_metrics = calculate_competition_metrics(y_val, val_preds)
-
-    # 6. 모델 저장
-    print("💾 Saving model...")
-    model_dir = f"checkpoints/lightgbm/{run_name}"
-    os.makedirs(model_dir, exist_ok=True)
-    model_path = f"{model_dir}/lightgbm_model.txt"
-
-    model.save_model(model_path)
-
-    # 메타데이터도 함께 저장
-    model_metadata = {
-        'config': LIGHTGBM_CONFIG,
-        'feature_names': feature_names,
-        'processor': processor,
-        'train_metrics': train_metrics,
-        'val_metrics': val_metrics,
-        'best_iteration': model.best_iteration,
-        'timestamp': datetime.now().isoformat()
+    # Calculate Out-of-Fold metrics
+    oof_comp_metrics = calculate_competition_metrics(train_y, oof_predictions)
+    oof_metrics = {
+        "oof_auc": oof_comp_metrics["auc"],
+        "oof_ap": oof_comp_metrics["ap"],
+        "oof_comp_score": oof_comp_metrics["comp_score"],
+        "oof_wll": oof_comp_metrics["wll"],
     }
 
-    with open(f"{model_dir}/model_metadata.pkl", 'wb') as f:
-        pickle.dump(model_metadata, f)
+    # Calculate validation metrics
+    val_comp_metrics = calculate_competition_metrics(val_y, val_predictions)
+    val_metrics = {
+        "val_auc": val_comp_metrics["auc"],
+        "val_ap": val_comp_metrics["ap"],
+        "val_comp_score": val_comp_metrics["comp_score"],
+        "val_wll": val_comp_metrics["wll"],
+    }
 
-    # 7. 피처 중요도 분석
-    print("📊 Analyzing feature importance...")
-    feature_imp = pd.DataFrame({
-        'feature': feature_names,
-        'importance': model.feature_importance(importance_type='gain')
-    }).sort_values('importance', ascending=False)
+    # Print fold results
+    print(f"\nIndividual Fold Results:")
+    for fold_result in fold_scores:
+        print(
+            f"  Fold {fold_result['fold']}: AUC={fold_result['auc']:.6f}, CompScore={fold_result['comp_score']:.6f}"
+        )
 
-    print("Top 10 most important features:")
-    print(feature_imp.head(10))
+    # Calculate fold statistics
+    fold_aucs = [f["auc"] for f in fold_scores]
+    fold_comp_scores = [f["comp_score"] for f in fold_scores]
 
-    # 피처 중요도 저장
-    feature_imp.to_csv(f"{model_dir}/feature_importance.csv", index=False)
+    print(f"\nCross-Validation Results:")
+    print(f"  CV AUC: {np.mean(fold_aucs):.6f} ± {np.std(fold_aucs):.6f}")
+    print(
+        f"  CV Competition Score: {np.mean(fold_comp_scores):.6f} ± {np.std(fold_comp_scores):.6f}"
+    )
 
-    # 8. 최종 결과
+    print(f"\nOut-of-Fold Metrics:")
+    print(f"  OOF AUC: {oof_metrics['oof_auc']:.6f}")
+    print(f"  OOF Competition Score: {oof_metrics['oof_comp_score']:.6f}")
+
+    print(f"\nValidation Metrics (Ensemble):")
+    print(f"  Val AUC: {val_metrics['val_auc']:.6f}")
+    print(f"  Val Competition Score: {val_metrics['val_comp_score']:.6f}")
+
+    # Save models
+    model_dir = f"{CHECKPOINT_DIR}/{run_name}"
+    os.makedirs(model_dir, exist_ok=True)
+
+    for i, model in enumerate(models):
+        model.save_model(f"{model_dir}/lightgbm_fold_{i+1}.txt")
+
+    # Save predictions separately
+    pd.DataFrame({"oof_predictions": oof_predictions}).to_parquet(
+        f"{model_dir}/oof_predictions.parquet"
+    )
+    pd.DataFrame({"val_predictions": val_predictions}).to_parquet(
+        f"{model_dir}/val_predictions.parquet"
+    )
+
+    # 핵심 메트릭만 WandB에 로깅
+    wandb.log(
+        {
+            # 성능 메트릭 (가장 중요)
+            "final_val_comp_score": val_metrics["val_comp_score"],
+            "final_val_auc": val_metrics["val_auc"],
+            "final_cv_comp_score": np.mean(fold_comp_scores),
+            "final_cv_auc": np.mean(fold_aucs),
+            "cv_std": np.std(fold_comp_scores),
+
+            # 시간 메트릭
+            "training_time_minutes": train_time / 60,
+            "total_time_minutes": (time.time() - start_time) / 60,
+
+            # 목표 달성 여부
+            "target_achieved": val_metrics["val_comp_score"] >= 0.35,
+        }
+    )
+
     total_time = time.time() - start_time
 
-    print("\n" + "="*50)
-    print("🎉 LightGBM Training Completed!")
-    print("="*50)
-    print(f"Data Load Time: {load_time:.2f}s")
-    print(f"Training Time: {training_time:.2f}s")
+    print("\n" + "=" * 50)
+    print("LightGBM K-Fold Training Completed!")
+    print("=" * 50)
+    print(f"Data Load Time: {data_time:.2f}s")
+    print(f"Training Time: {train_time:.2f}s")
     print(f"Total Time: {total_time:.2f}s")
-    print(f"Best Iteration: {model.best_iteration}")
+    print(f"Models saved: {model_dir}")
 
-    print(f"\n📊 Training Metrics:")
-    print(f"  Competition Score: {train_metrics['comp_score']:.6f}")
-    print(f"  AUC: {train_metrics['auc']:.6f}")
-    print(f"  AP: {train_metrics['ap']:.6f}")
-    print(f"  WLL: {train_metrics['wll']:.6f}")
-
-    print(f"\n🎯 Validation Metrics:")
-    print(f"  Competition Score: {val_metrics['comp_score']:.6f}")
-    print(f"  AUC: {val_metrics['auc']:.6f}")
-    print(f"  AP: {val_metrics['ap']:.6f}")
-    print(f"  WLL: {val_metrics['wll']:.6f}")
-
-    print(f"\nModel saved: {model_path}")
-
-    # 성능 비교 정보
-    print(f"\n📈 Performance Summary:")
-    print(f"Training time: {training_time:.2f}s (vs DeepFM ~2000s)")
-    print(f"Competition Score: {val_metrics['comp_score']:.6f}")
-    if val_metrics['comp_score'] >= 0.35:
-        print("🎯 TARGET ACHIEVED: 0.35+ Competition Score!")
-    else:
-        print(f"🎯 Target: 0.35+ (current: {val_metrics['comp_score']:.6f})")
-
-    # 최종 메트릭 로깅
-    wandb.log({
-        'best_iteration': model.best_iteration,
-        'train_comp_score': train_metrics['comp_score'],
-        'val_comp_score': val_metrics['comp_score'],
-        'train_auc': train_metrics['auc'],
-        'val_auc': val_metrics['auc'],
-        'training_time': training_time,
-        'total_time': total_time
-    })
+    # Target achievement check
+    target_score = 0.35
+    achieved = val_metrics["val_comp_score"] >= target_score
+    print(f"Target: {target_score}+ (current: {val_metrics['val_comp_score']:.6f})")
+    if achieved:
+        print("TARGET ACHIEVED with K-Fold ensemble!")
 
     wandb.finish()
-
-    return model, val_metrics
 
 
 if __name__ == "__main__":

@@ -9,12 +9,13 @@ import torch.nn as nn
 class OptimizedDeepFM(nn.Module):
     """inventory_id embedding을 10차원으로 최적화한 DeepFM"""
 
-    def __init__(self, feature_dims, default_embedding_dim=16, hidden_units=[256, 128], dropout=0.2, num_numerical=83):
+    def __init__(self, feature_dims, default_embedding_dim=16, hidden_units=[256, 128], dropout=0.2, num_numerical=None):
         super(OptimizedDeepFM, self).__init__()
 
         self.feature_dims = feature_dims
         self.default_embedding_dim = default_embedding_dim
-        self.num_numerical = num_numerical
+        # num_numerical이 None이면 기본값 사용 (하위 호환성)
+        self.num_numerical = num_numerical if num_numerical is not None else 83
 
         # inventory_id는 10차원, 나머지는 16차원
         self.inventory_embedding_dim = 10
@@ -66,6 +67,7 @@ class OptimizedDeepFM(nn.Module):
         print(f"OptimizedDeepFM created:")
         print(f"   inventory_id embedding: {self.inventory_embedding_dim}D")
         print(f"   Other embeddings: {default_embedding_dim}D")
+        print(f"   Numerical features: {self.num_numerical}")
         print(f"   Total embedding dim: {total_embedding_dim}")
 
     def forward(self, categorical_features, numerical_features):

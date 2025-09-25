@@ -11,10 +11,9 @@ from tqdm import tqdm
 from datetime import datetime
 
 # 현재 디렉토리를 Python 경로에 추가
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from ..models.deepfm_core import DeepFM
-from ..models.feature_processor import InferenceFeatureProcessor
+from src.models.deepfm_optimized import OptimizedDeepFM
 
 
 def find_latest_model():
@@ -57,6 +56,7 @@ def predict_with_modular_model(model_path=None):
     # 프로세서 복원
     processor = checkpoint['processor']
     config = checkpoint.get('config', {})
+    metadata = checkpoint.get('metadata', {})
 
     # 버전 호환성 처리 (점수 표시)
     if 'best_comp_score' in checkpoint:
@@ -75,6 +75,7 @@ def predict_with_modular_model(model_path=None):
     print(f"✅ Processor loaded: {len(processor.categorical_features)} categorical, {len(processor.numerical_features)} numerical")
     print(f"📊 Model config: {config}")
     print(f"🎯 Best {score_type}: {score:.6f}")
+    print(f"📋 Feature dims: {len(processor.categorical_feature_dims)} categorical features")
 
     # 테스트 데이터 로드
     print("📊 Loading test data...")
@@ -88,39 +89,18 @@ def predict_with_modular_model(model_path=None):
     # 테스트 데이터 전처리
     print("🔧 Processing test data...")
 
-    # Processor 효율적 생성/복사
-    if isinstance(processor, InferenceFeatureProcessor):
-        # 이미 InferenceFeatureProcessor인 경우
-        inference_processor = processor
-        print("   Using existing InferenceFeatureProcessor")
-    else:
-        # TrainingFeatureProcessor -> InferenceFeatureProcessor 변환
-        inference_processor = InferenceFeatureProcessor()
-
-        # 핵심 속성들만 복사 (반복문 활용)
-        essential_attrs = [
-            'categorical_encoders', 'categorical_features', 'numerical_features',
-            'feature_dims', 'scaler', 'numerical_stats'
-        ]
-
-        for attr in essential_attrs:
-            if hasattr(processor, attr):
-                setattr(inference_processor, attr, getattr(processor, attr))
-
-        print("   Converted TrainingFeatureProcessor to InferenceFeatureProcessor")
-
-    # 전처리 적용
-    test_processed = inference_processor.transform(test.copy())
+    # ExactDeepFMProcessor 직접 사용
+    test_processed = processor.transform(test.copy())
 
     print(f"✅ Test data processed: {test_processed.shape}")
 
     # 모델 초기화 및 가중치 로드
     print("🧠 Initializing model...")
-    model = DeepFM(
-        feature_dims=processor.feature_dims,
-        embedding_dim=config.get('EMBEDDING_DIM', 32),            # Optuna 최적값
-        hidden_units=config.get('HIDDEN_UNITS', [1024, 512, 256]), # Optuna 최적값
-        dropout=config.get('DROPOUT', 0.238),                     # Optuna 최적값
+    model = OptimizedDeepFM(
+        feature_dims=processor.categorical_feature_dims,
+        default_embedding_dim=config.get('EMBEDDING_DIM', 16),
+        hidden_units=config.get('HIDDEN_UNITS', [256, 128]),
+        dropout=config.get('DROPOUT', 0.2),
         num_numerical=len(processor.numerical_features)
     ).to(device)
 

@@ -1,8 +1,3 @@
-"""
-DeepFM 데이터 준비 스크립트
-피처 전처리와 데이터 분할을 수행하고 결과를 저장
-"""
-
 import os
 import gc
 import time
@@ -11,153 +6,352 @@ import pandas as pd
 import pickle
 import torch
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder, QuantileTransformer
 
-from ..models.feature_processor import TrainingFeatureProcessor
-from ..models.deepfm_core import DeepFMDataset
-from ..utils.config import DEEPFM_CONFIG
+# Add project root to path
+import sys
+
+sys.path.append(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+)
+
+from src.models.deepfm_core import DeepFMDataset
+from src.utils.config import DEEPFM_CONFIG
+from src.utils.sequence_utils import process_sequence_features
+
+# Constants
+DATA_DIR = "data/processed/deepfm"
+XGBOOST_DATA_DIR = "data/processed/xgboost"
+BATCH_SIZE = 500000
+
+
+def load_xgboost_features():
+    """XGBoost 처리된 피처 목록 로드"""
+    try:
+        with open(f"{XGBOOST_DATA_DIR}/feature_names.pkl", "rb") as f:
+            feature_names = pickle.load(f)
+
+        with open(f"{XGBOOST_DATA_DIR}/processor.pkl", "rb") as f:
+            processor = pickle.load(f)
+
+        print(f"Loaded XGBoost features: {len(feature_names)} features")
+
+        categorical = processor.categorical_features
+        numerical = [f for f in feature_names if f not in categorical]
+
+        print(f"  Categorical: {len(categorical)} features - {categorical}")
+        print(f"  Numerical: {len(numerical)} features (includes EDA features)")
+
+        return feature_names, categorical, numerical, processor
+
+    except FileNotFoundError as e:
+        raise FileNotFoundError(
+            "XGBoost data not found. Run XGBoost data preparation first."
+        ) from e
+
+
+
+
+def create_deepfm_features(df):
+    """XGBoost 피처 + 시퀀스 통계 피처 생성"""
+    print("Creating XGBoost + sequence features...")
+
+    # 1. XGBoost 피처 정보 로드
+    xgb_features, xgb_categorical, xgb_numerical, xgb_processor = (
+        load_xgboost_features()
+    )
+
+    # 2. 시퀀스 피처 먼저 처리 (utils 모듈 사용)
+    seq_features = process_sequence_features(df["seq"], BATCH_SIZE)
+
+    # 3. 원본 데이터에서 XGBoost Enhanced 피처만 선택
+    print("🔍 Selecting exact XGBoost Enhanced features...")
+
+    # XGBoost 데이터 직접 로드해서 변환 방식 복사
+    xgb_X = np.load("data/processed/xgboost/X_train.npy")
+    xgb_y = np.load("data/processed/xgboost/y_train.npy")
+
+    print(f"   XGBoost shape: {xgb_X.shape}")
+    print(f"   Target features: {len(xgb_features)}")
+
+    # XGBoost 프로세서를 사용해서 동일하게 변환
+    print("🔧 Applying XGBoost processor...")
+    df_processed = xgb_processor.transform(df.copy())
+
+    # 정확한 피처만 선택
+    available_features = [f for f in xgb_features if f in df_processed.columns]
+    missing_features = [f for f in xgb_features if f not in df_processed.columns]
+
+    print(f"   Available features: {len(available_features)}/{len(xgb_features)}")
+    if missing_features:
+        print(f"   Missing features: {missing_features}")
+
+    df_selected = df_processed[available_features + ["clicked"]].copy()
+
+    # 4. 시퀀스 피처 추가
+    print("🔗 Adding sequence features...")
+    seq_features.index = df_selected.index
+    df_final = pd.concat([df_selected, seq_features], axis=1)
+
+    # 5. DeepFM용 스케일링 (수치형만)
+    print("⚖️ Applying DeepFM scaling...")
+    categorical_features = [f for f in available_features if f in xgb_categorical]
+    numerical_features = [
+        f for f in df_final.columns if f not in categorical_features and f != "clicked"
+    ]
+
+    # 스케일러 적용
+    scaler = QuantileTransformer(
+        output_distribution="uniform",
+        n_quantiles=1000,
+        subsample=100000,
+        random_state=42,
+    )
+
+    df_final[numerical_features] = scaler.fit_transform(df_final[numerical_features])
+    df_final[numerical_features] = df_final[numerical_features].astype(np.float32)
+
+    print(f"✅ Exact DeepFM features created!")
+    print(f"   Total features: {len(df_final.columns) - 1}")  # -1 for clicked
+    print(f"   Categorical: {len(categorical_features)}")
+    print(f"   Numerical: {len(numerical_features)}")
+    print(f"   Expected: 78 + 7 = 85")
+
+    return df_final, categorical_features, numerical_features, scaler, xgb_processor
+
+
+class ExactDeepFMProcessor:
+    """정확한 XGBoost Enhanced + 시퀀스 피처 프로세서"""
+
+    def __init__(self, categorical_features, numerical_features, scaler, xgb_processor):
+        self.categorical_features = categorical_features
+        self.numerical_features = numerical_features
+        self.scaler = scaler
+        self.xgb_processor = xgb_processor
+
+        # categorical_feature_dims 계산 (DeepFMDataset에서 필요)
+        self.categorical_feature_dims = {}
+
+    def transform(self, df):
+        """테스트 데이터에 동일한 전처리 적용"""
+        print("🔧 Applying ExactDeepFMProcessor transform...")
+
+        # 1. 시퀀스 피처 처리
+        seq_features = process_sequence_features(df["seq"])
+
+        # 2. XGBoost 프로세서 적용
+        print("   Applying XGBoost processor...")
+        df_processed = self.xgb_processor.transform(df.copy())
+
+        # 3. 정확한 피처만 선택
+        available_features = [f for f in df_processed.columns
+                             if f in self.categorical_features or f in self.numerical_features]
+
+        # clicked 컬럼이 있다면 제외
+        if "clicked" in df_processed.columns:
+            df_selected = df_processed[available_features].copy()
+        else:
+            df_selected = df_processed[available_features].copy()
+
+        # 4. 시퀀스 피처 추가
+        print("   Adding sequence features...")
+        seq_features.index = df_selected.index
+        df_final = pd.concat([df_selected, seq_features], axis=1)
+
+        # 5. 스케일링 (수치형만)
+        print("   Applying scaling...")
+        numerical_cols = [col for col in self.numerical_features if col in df_final.columns]
+        if numerical_cols:
+            df_final[numerical_cols] = self.scaler.transform(df_final[numerical_cols])
+            df_final[numerical_cols] = df_final[numerical_cols].astype(np.float32)
+
+        print(f"   Transformed data shape: {df_final.shape}")
+        return df_final
 
 
 def main():
-    print("🔧 Starting DeepFM data preparation...")
+    print("Starting DeepFM data preparation...")
+    print("XGBoost features + sequence statistics features")
 
     start_time = time.time()
 
-    # 1. 데이터 로드
-    print("📁 Loading raw data...")
-    all_train = pd.read_parquet("data/train.parquet", engine="pyarrow")
-    print(f"Full training data loaded: {all_train.shape}")
+    try:
+        # 1. 데이터 로드
+        print("\nLoading raw data...")
+        all_train = pd.read_parquet("data/train.parquet", engine="pyarrow")
+        print(f"Training data loaded: {all_train.shape}")
 
-    # 샘플링 설정 - 전체 데이터 사용 (Optuna 포함)
-    sample_size = DEEPFM_CONFIG['SAMPLE_SIZE']
+        # 샘플링 (필요시)
+        sample_size = DEEPFM_CONFIG.get("SAMPLE_SIZE")
+        if sample_size:
+            all_train = all_train.sample(
+                n=sample_size, random_state=DEEPFM_CONFIG.get("SEED", 42)
+            )
+            print(f"Sampled to: {all_train.shape}")
 
-    if sample_size:
-        all_train = all_train.sample(n=sample_size, random_state=DEEPFM_CONFIG['SEED'])
-        print(f"Sampled to: {all_train.shape}")
-    else:
-        print("🔥 Using full dataset for accurate hyperparameter optimization")
+        # 2. 피처 생성
+        print("\nCreating features...")
+        processed_df, categorical_features, numerical_features, scaler, xgb_processor = (
+            create_deepfm_features(all_train)
+        )
 
-    print(f"Training data ready: {all_train.shape}")
-
-    # 2. 피처 전처리
-    print("🔧 Processing features...")
-    processor = TrainingFeatureProcessor()
-    processed_df = processor.fit_transform(all_train.copy())
-
-    print(f"Features processed: {processed_df.shape}")
-    print(f"Categorical features: {len(processor.categorical_features)}")
-    print(f"Numerical features: {len(processor.numerical_features)}")
+    except Exception as e:
+        raise RuntimeError(f"Data loading failed: {e}") from e
 
     # 메모리 정리
     del all_train
     gc.collect()
 
-    # 3. 훈련/검증 분할
-    print("✂️ Splitting data...")
-    X = processed_df.drop(['clicked'], axis=1)
-    y = processed_df['clicked']
+    # 3. 타겟과 피처 분리
+    print("\nSeparating features and target...")
+    X = processed_df.drop("clicked", axis=1)
+    y = processed_df["clicked"].values
 
+    print(f"Final feature shape: {X.shape}")
+    print(f"CTR: {y.mean():.4f}")
+
+    # 4. 훈련/검증 분할
+    print("\n🔄 Splitting data...")
     X_train, X_val, y_train, y_val = train_test_split(
-        X, y, test_size=0.2, random_state=DEEPFM_CONFIG['SEED'], stratify=y
+        X, y, test_size=0.2, random_state=DEEPFM_CONFIG["SEED"], stratify=y
     )
 
     print(f"Train: {X_train.shape}, Val: {X_val.shape}")
-    print(f"Train CTR: {y_train.mean():.4f}, Val CTR: {y_val.mean():.4f}")
 
-    # 메모리 정리
-    del processed_df, X, y
-    gc.collect()
+    # 5. 프로세서 생성 (xgb_processor 포함)
+    processor = ExactDeepFMProcessor(categorical_features, numerical_features, scaler, xgb_processor)
 
-    # 4. DeepFM Dataset 생성
-    print("🔄 Creating DeepFM datasets...")
+    # categorical_feature_dims 계산
+    for feat in categorical_features:
+        if feat in X.columns:
+            processor.categorical_feature_dims[feat] = X[feat].nunique() + 1
 
-    # 훈련 데이터셋 생성
-    train_dataset = DeepFMDataset(
-        pd.concat([X_train, y_train], axis=1),
-        processor,
-        target_col='clicked',
-        has_target=True
-    )
+    # 6. DeepFM Dataset 생성 (간단한 방식)
+    print("\n🧠 Creating DeepFM datasets...")
 
-    # 검증 데이터셋 생성
-    val_dataset = DeepFMDataset(
-        pd.concat([X_val, y_val], axis=1),
-        processor,
-        target_col='clicked',
-        has_target=True
-    )
+    # target과 함께 DataFrame 생성
+    X_train_with_target = X_train.copy()
+    X_train_with_target["clicked"] = y_train
 
-    print(f"Train dataset: {len(train_dataset)} samples")
-    print(f"Val dataset: {len(val_dataset)} samples")
+    X_val_with_target = X_val.copy()
+    X_val_with_target["clicked"] = y_val
 
-    # 메모리 정리
-    del X_train, X_val, y_train, y_val
-    gc.collect()
+    # 수동으로 dataset 생성 (오류 방지)
+    train_categorical = {}
+    train_numerical = None
 
-    # 5. 데이터 저장
-    print("💾 Saving prepared data...")
+    # categorical 데이터
+    for col in categorical_features:
+        if col in X_train.columns:
+            train_categorical[col] = torch.LongTensor(X_train[col].values)
 
-    os.makedirs('data/processed/deepfm', exist_ok=True)
+    # numerical 데이터
+    if numerical_features:
+        numerical_cols = [col for col in numerical_features if col in X_train.columns]
+        if numerical_cols:
+            train_numerical = torch.FloatTensor(X_train[numerical_cols].values)
 
-    # 데이터셋 저장
-    torch.save(train_dataset, 'data/processed/deepfm/train_dataset.pt')
-    torch.save(val_dataset, 'data/processed/deepfm/val_dataset.pt')
+    train_targets = torch.FloatTensor(y_train)
 
-    # 프로세서 저장
-    with open('data/processed/deepfm/processor.pkl', 'wb') as f:
-        pickle.dump(processor, f)
+    # validation도 동일하게
+    val_categorical = {}
+    for col in categorical_features:
+        if col in X_val.columns:
+            val_categorical[col] = torch.LongTensor(X_val[col].values)
 
-    # 메타데이터 저장
+    val_numerical = None
+    if numerical_features:
+        numerical_cols = [col for col in numerical_features if col in X_val.columns]
+        if numerical_cols:
+            val_numerical = torch.FloatTensor(X_val[numerical_cols].values)
+
+    val_targets = torch.FloatTensor(y_val)
+
+    print(f"Train dataset: {len(y_train)} samples")
+    print(f"Val dataset: {len(y_val)} samples")
+
+    # 7. 메타데이터
     metadata = {
-        'feature_dims': processor.feature_dims,
-        'categorical_features': processor.categorical_features,
-        'numerical_features': processor.numerical_features,
-        'train_size': len(train_dataset),
-        'val_size': len(val_dataset),
-        'train_ctr': float(train_dataset.targets.mean()),
-        'val_ctr': float(val_dataset.targets.mean()),
-        'num_categorical': len(processor.categorical_features),
-        'num_numerical': len(processor.numerical_features),
-        'config_used': DEEPFM_CONFIG.copy()
+        "categorical_features": categorical_features,
+        "categorical_feature_dims": processor.categorical_feature_dims,
+        "numerical_features": numerical_features,
+        "data_shape": {
+            "train": X_train.shape,
+            "val": X_val.shape,
+            "features": len(X_train.columns),
+        },
+        "ctr_stats": {
+            "train_ctr": y_train.mean(),
+            "val_ctr": y_val.mean(),
+            "total_ctr": y.mean(),
+        },
+        "config_used": DEEPFM_CONFIG.copy(),
+        "comparison_info": {
+            "purpose": "XGBoost compatibility",
+            "base_features": len(categorical_features)
+            + len([f for f in numerical_features if not f.startswith("seq_")]),
+            "sequence_features": len(
+                [f for f in numerical_features if f.startswith("seq_")]
+            ),
+            "total_features": len(X_train.columns),
+        },
     }
 
-    with open('data/processed/deepfm/metadata.pkl', 'wb') as f:
+    # 8. 저장
+    os.makedirs(DATA_DIR, exist_ok=True)
+
+    print(f"\nSaving to {DATA_DIR}...")
+
+    # 데이터셋 저장
+    torch.save(
+        {
+            "categorical": train_categorical,
+            "numerical": train_numerical,
+            "targets": train_targets,
+        },
+        f"{DATA_DIR}/train_dataset.pt",
+    )
+
+    torch.save(
+        {
+            "categorical": val_categorical,
+            "numerical": val_numerical,
+            "targets": val_targets,
+        },
+        f"{DATA_DIR}/val_dataset.pt",
+    )
+
+    # 메타데이터와 프로세서 저장
+    with open(f"{DATA_DIR}/metadata.pkl", "wb") as f:
         pickle.dump(metadata, f)
 
-    preparation_time = time.time() - start_time
+    with open(f"{DATA_DIR}/processor.pkl", "wb") as f:
+        pickle.dump(processor, f)
 
-    # 6. 요약 출력
-    print("\n" + "="*50)
-    print("✅ DeepFM Data Preparation Completed!")
-    print("="*50)
-    print(f"Preparation time: {preparation_time:.2f} seconds")
-    print(f"Train samples: {metadata['train_size']:,}")
-    print(f"Val samples: {metadata['val_size']:,}")
-    print(f"Categorical features: {metadata['num_categorical']}")
-    print(f"Numerical features: {metadata['num_numerical']}")
-    print(f"Train CTR: {metadata['train_ctr']:.4f}")
-    print(f"Val CTR: {metadata['val_ctr']:.4f}")
+    total_time = time.time() - start_time
 
-    print(f"\nFeature dimensions:")
-    for feat, dim in processor.feature_dims.items():
-        print(f"  {feat}: {dim}")
+    print("\n" + "=" * 50)
+    print("DeepFM data preparation completed!")
+    print("=" * 50)
+    print(f"Total time: {total_time:.2f} seconds")
+    print(f"Features: {metadata['data_shape']['features']}")
+    print(f"  Categorical: {len(categorical_features)}")
+    print(f"  Numerical: {len(numerical_features)}")
+    print(f"  Base (XGBoost): {metadata['comparison_info']['base_features']}")
+    print(f"  Sequence: {metadata['comparison_info']['sequence_features']}")
+    print(f"Train samples: {len(y_train):,}")
+    print(f"Val samples: {len(y_val):,}")
+    print(f"Saved to: {DATA_DIR}")
 
-    print(f"\nSaved to: data/processed/deepfm/")
-    print("Files created:")
-    print("  - train_dataset.pt")
-    print("  - val_dataset.pt")
-    print("  - processor.pkl")
-    print("  - metadata.pkl")
-
-    # 파일 크기 정보
-    train_size = os.path.getsize('data/processed/deepfm/train_dataset.pt') / 1024**3
-    val_size = os.path.getsize('data/processed/deepfm/val_dataset.pt') / 1024**3
-    print(f"\nFile sizes:")
-    print(f"  Train dataset: {train_size:.2f} GB")
-    print(f"  Val dataset: {val_size:.2f} GB")
-    print(f"  Total: {train_size + val_size:.2f} GB")
-
-    print("\n🚀 Ready for DeepFM training!")
+    return metadata
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        metadata = main()
+        print("\nSuccess! Ready for DeepFM training.")
+    except Exception as e:
+        print(f"\nError: {e}")
+        import traceback
+
+        traceback.print_exc()

@@ -24,10 +24,10 @@ from src.utils.config import DEEPFM_CONFIG
 def load_xgboost_enhanced_features():
     """XGBoost Enhanced의 정확한 피처 목록 로드"""
     try:
-        with open('data/processed/xgboost_enhanced/feature_names.pkl', 'rb') as f:
+        with open('data/processed/xgboost/feature_names.pkl', 'rb') as f:
             feature_names = pickle.load(f)
 
-        with open('data/processed/xgboost_enhanced/processor.pkl', 'rb') as f:
+        with open('data/processed/xgboost/processor.pkl', 'rb') as f:
             processor = pickle.load(f)
 
         print(f"✅ Loaded XGBoost Enhanced features: {len(feature_names)} features")
@@ -50,29 +50,27 @@ def process_sequence_features(seq_series):
 
     def extract_stats(seq_str):
         if pd.isna(seq_str) or seq_str == '' or seq_str == 'nan':
-            return [0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+            return [0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 
         try:
             seq_array = np.fromstring(str(seq_str), sep=",", dtype=np.float32)
             if len(seq_array) == 0:
-                return [0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+                return [0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 
             length = len(seq_array)
             mean = float(np.mean(seq_array))
             std = float(np.std(seq_array))
             minimum = float(np.min(seq_array))
             maximum = float(np.max(seq_array))
-            total = float(np.sum(seq_array))
 
             range_val = maximum - minimum if maximum != minimum else 0
             normalized_range = range_val / (maximum + 1e-8) if maximum > 0 else 0
-            density = total / length if length > 0 else 0
             cv = std / (mean + 1e-8) if mean != 0 else 0
 
-            return [length, mean, std, minimum, maximum, total, normalized_range, density, cv]
+            return [length, mean, std, minimum, maximum, normalized_range, cv]
 
         except:
-            return [0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+            return [0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 
     # 배치 처리
     batch_size = 100000
@@ -88,8 +86,8 @@ def process_sequence_features(seq_series):
             print(f"     Processed {batch_end:,}/{len(seq_series):,} sequences...")
 
     seq_features = pd.DataFrame(all_stats, columns=[
-        'seq_length', 'seq_mean', 'seq_std', 'seq_min', 'seq_max', 'seq_sum',
-        'seq_normalized_range', 'seq_density', 'seq_cv'
+        'seq_length', 'seq_mean', 'seq_std', 'seq_min', 'seq_max',
+        'seq_normalized_range', 'seq_cv'
     ], dtype=np.float32)
 
     print(f"   Created {seq_features.shape[1]} sequence features")
@@ -156,7 +154,7 @@ def create_exact_deepfm_features(df):
     print(f"   Total features: {len(df_final.columns) - 1}")  # -1 for clicked
     print(f"   Categorical: {len(categorical_features)}")
     print(f"   Numerical: {len(numerical_features)}")
-    print(f"   Expected: 78 + 9 = 87")
+    print(f"   Expected: 78 + 7 = 85")
 
     return df_final, categorical_features, numerical_features, scaler
 
@@ -331,7 +329,7 @@ def main():
     print(f"   Train samples: {len(y_train):,}")
     print(f"   Val samples: {len(y_val):,}")
 
-    expected = 87
+    expected = 85
     actual = metadata['data_shape']['features']
     status = "✅ PERFECT" if actual == expected else f"❌ MISMATCH ({actual} vs {expected})"
     print(f"   Status: {status}")

@@ -38,30 +38,30 @@ WANDB_CONFIG = {
     "NOTES": "DeepFM with industry standard hyperparams + Focal Loss",
 }
 
-# LightGBM 현업 표준 설정 (CTR 최적화) - TreeBasedFeatureProcessor 적용 후 재조정
+# LightGBM 수정된 설정 (불균형 데이터 처리 개선)
 LIGHTGBM_CONFIG = {
     "objective": "binary",
     "metric": "binary_logloss",
     "boosting_type": "gbdt",
-    "device": "cpu",                     # GPU 문제 가능성으로 일시적 CPU 사용
-    # "gpu_platform_id": 0,
-    # "gpu_device_id": 0,
-    "num_leaves": 31,                    # 기본값으로 복원 (127→31)
-    "learning_rate": 0.1,                # 학습률 증가 (0.05→0.1)
-    "feature_fraction": 0.9,             # 피처 활용도 증가 (0.8→0.9)
-    "bagging_fraction": 0.9,             # 안정성 증가 (0.8→0.9)
-    "bagging_freq": 1,                   # 매 iteration (5→1)
-    "min_child_samples": 20,             # 기본값으로 복원 (100→20)
+    "device": "cpu",                     # CPU로 안정성 확보
+    "num_leaves": 127,                   # 안정적인 설정
+    "learning_rate": 0.1,                # 0.05 → 0.1 (더 적극적 학습)
+    "feature_fraction": 0.8,             # 과적합 방지
+    "bagging_fraction": 0.8,             # 과적합 방지
+    "bagging_freq": 5,                   # 더 안정적으로
+    "min_child_samples": 20,             # 50 → 20 (덜 제한적)
     "min_child_weight": 0.001,           # 불균형 데이터 대응
-    "reg_alpha": 0.1,                    # L1 정규화 추가
-    "reg_lambda": 0.1,                   # L2 정규화 추가
-    "max_depth": -1,                     # 제한 없음 (num_leaves로 제어)
-    "num_boost_round": 2000,             # 트리 수 증가 (1000→2000)
-    "early_stopping_rounds": 100,        # 조기 종료 완화 (50→100)
+    "reg_alpha": 0.1,                    # L1 정규화
+    "reg_lambda": 1.0,                   # L2 정규화 강화
+    "max_depth": 8,                      # XGBoost와 동일
+    "num_boost_round": 1000,             # 적절한 수준으로 조정
+    "early_stopping_rounds": 100,        # 50 → 100 (더 관대한 조기 종료)
     "verbose": -1,
     "random_state": 42,
     "n_jobs": -1,
-    "class_weight": "balanced",
+    "is_unbalance": True,                # LightGBM 내장 불균형 처리 활성화 (scale_pos_weight 대신)
+    "force_col_wise": True,              # 메모리 효율성
+    "bin_construct_sample_cnt": 200000,  # 안정적인 이진화
 }
 
 # LightGBM WandB 설정
@@ -72,22 +72,25 @@ LIGHTGBM_WANDB_CONFIG = {
     "NOTES": "LightGBM with industry standard hyperparams for CTR prediction",
 }
 
-# XGBoost Optuna 최적화 설정 (0.355368 달성 - 9/19 Optuna 50 trials)
+# XGBoost Optuna 최적화 설정 (0.355654 달성 - 9/24 Trial 75)
 XGBOOST_CONFIG = {
     "objective": "binary:logistic",
     "eval_metric": "auc",
     "booster": "gbtree",
     "device": "cuda:0",                  # GPU 가속
     "tree_method": "hist",               # 히스토그램 방식
-    "max_depth": 8,                      # Optuna 최적값
-    "learning_rate": 0.08528321105586273, # Optuna 최적값 (0.1→0.085)
-    "n_estimators": 225,                 # Optuna 최적값 (200→225)
-    "subsample": 0.935827259483019,      # Optuna 최적값 (0.9→0.936)
-    "colsample_bytree": 0.8730924809775612, # Optuna 최적값 (0.9→0.873)
-    "colsample_bylevel": 0.8598365311238199, # Optuna 최적값 (0.9→0.860)
-    "min_child_weight": 113,             # Optuna 최적값 (100→113)
-    "reg_alpha": 0.19042170254858717,    # Optuna 최적값 (0.1→0.190)
-    "reg_lambda": 0.06783887727961516,   # Optuna 최적값 (0.1→0.068)
+    "max_depth": 8,                      # Trial 75 최적값
+    "learning_rate": 0.05955422983797188, # Trial 75 최적값 (더 안정적)
+    "n_estimators": 325,                 # Trial 75 최적값 (충분한 학습)
+    "min_child_weight": 169,             # Trial 75 최적값 (강력한 과적합 방지)
+    "reg_alpha": 0.03622340097891742,    # Trial 75 최적값 (L1 정규화)
+    "reg_lambda": 6.672525788694994,     # Trial 75 최적값 (강력한 L2 정규화)
+    "subsample": 0.9763655879223412,     # Trial 75 최적값 (높은 샘플 활용)
+    "colsample_bytree": 0.8873768149476484, # Trial 75 최적값 (특성 활용)
+    "colsample_bylevel": 0.8904543884294897, # Trial 75 최적값 (레벨별 샘플링)
+    "colsample_bynode": 0.8870357675572318,  # Trial 75 최적값 (노드별 샘플링)
+    "gamma": 0.6334784828161101,         # Trial 75 최적값 (분할 제약)
+    "max_delta_step": 9,                 # Trial 75 최적값 (안정성)
     "scale_pos_weight": 51.6,            # 클래스 불균형 (98.1/1.9)
     "random_state": 42,
     "n_jobs": -1,

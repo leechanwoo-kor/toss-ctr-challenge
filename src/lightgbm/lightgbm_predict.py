@@ -1,191 +1,181 @@
 """
-LightGBM 예측 스크립트
+LightGBM K-fold 앙상블 예측 스크립트 (XGBoost와 동일한 구조)
 """
 
 import os
+import sys
 import numpy as np
 import pandas as pd
 import pickle
 from datetime import datetime
-from tqdm import tqdm
 import lightgbm as lgb
 
-from ..models.feature_processor import InferenceFeatureProcessor
+# Add project root to path
+sys.path.append(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+)
 
 
-def find_latest_model():
-    """최신 LightGBM 모델 자동 탐색"""
-    model_dir = "checkpoints/lightgbm"
-    if not os.path.exists(model_dir):
-        return None
-
-    experiments = [d for d in os.listdir(model_dir) if os.path.isdir(os.path.join(model_dir, d))]
-    if not experiments:
-        return None
-
-    # 가장 최근 수정된 실험 디렉토리 찾기
-    latest_exp = max(experiments, key=lambda x: os.path.getctime(os.path.join(model_dir, x)))
-    model_path = f"{model_dir}/{latest_exp}/lightgbm_model.txt"
-
-    if os.path.exists(model_path):
-        return model_path, f"{model_dir}/{latest_exp}/model_metadata.pkl"
-    else:
-        return None
+# Constants
+DATA_DIR = "data/processed/lightgbm"
+CHECKPOINT_DIR = "checkpoints/lightgbm"
+SUBMISSION_DIR = "submissions/lightgbm"
+TEST_DATA_PATH = "data/test.parquet"
+SAMPLE_SUBMISSION_PATH = "data/sample_submission.csv"
 
 
-def predict_with_lightgbm(model_path=None, metadata_path=None):
-    """LightGBM 모델로 예측"""
+def load_kfold_models(kfold_dir):
+    """K-fold 모델들 로드"""
+    models = []
+    model_files = [
+        f
+        for f in os.listdir(kfold_dir)
+        if f.startswith("lightgbm_fold_") and f.endswith(".txt")
+    ]
+    model_files.sort()
 
-    print(f"🌳 Starting LightGBM prediction...")
+    print(f"Found {len(model_files)} fold models")
 
-    # 모델 경로 자동 탐색
-    if model_path is None:
-        result = find_latest_model()
-        if result is None:
-            raise FileNotFoundError("No LightGBM model found. Run training first.")
-        model_path, metadata_path = result
-        print(f"🔍 Auto-detected model: {model_path}")
-    else:
-        print(f"📁 Using specified model: {model_path}")
+    for model_file in model_files:
+        model_path = os.path.join(kfold_dir, model_file)
+        model = lgb.Booster(model_file=model_path)
+        models.append(model)
+        print(f"  Loaded: {model_file}")
 
-    # 모델 로드
-    print("📂 Loading saved model...")
-    model = lgb.Booster(model_file=model_path)
+    return models
 
-    # 메타데이터 로드
-    with open(metadata_path, 'rb') as f:
-        metadata = pickle.load(f)
 
-    processor = metadata['processor']
-    feature_names = metadata['feature_names']
-    val_metrics = metadata['val_metrics']
+def load_test_data():
+    """테스트 데이터 로드 및 전처리"""
+    print("Loading test data...")
 
-    print(f"✅ Model loaded: {model.num_trees()} trees")
-    print(f"📊 Model performance:")
-    print(f"  Competition Score: {val_metrics['comp_score']:.6f}")
-    print(f"  AUC: {val_metrics['auc']:.6f}")
-    print(f"  Best iteration: {metadata['best_iteration']}")
+    try:
+        # 원본 테스트 데이터 로드
+        test = pd.read_parquet(TEST_DATA_PATH)
+        test_ids = test["ID"].copy() if "ID" in test.columns else None
 
-    # 테스트 데이터 로드
-    print("📊 Loading test data...")
-    test = pd.read_parquet("data/test.parquet", engine="pyarrow")
-    test_ids = test['ID'].copy() if 'ID' in test.columns else None
+        if "ID" in test.columns:
+            test = test.drop(columns=["ID"])
 
-    if 'ID' in test.columns:
-        test = test.drop(columns=['ID'])
-    print(f"Test data shape: {test.shape}")
+        print(f"Test data shape: {test.shape}")
 
-    # 테스트 데이터 전처리
-    print("🔧 Processing test data...")
+        # 프로세서와 피처명 로드
+        with open(f"{DATA_DIR}/processor.pkl", "rb") as f:
+            processor = pickle.load(f)
 
-    # Processor 생성/복사
-    if isinstance(processor, InferenceFeatureProcessor):
-        inference_processor = processor
-        print("   Using existing InferenceFeatureProcessor")
-    else:
-        inference_processor = InferenceFeatureProcessor()
+        with open(f"{DATA_DIR}/feature_names.pkl", "rb") as f:
+            feature_names = pickle.load(f)
 
-        # 핵심 속성들만 복사
-        essential_attrs = [
-            'categorical_encoders', 'categorical_features', 'numerical_features',
-            'feature_dims', 'scaler', 'numerical_stats'
-        ]
+        print("Processing test data...")
 
-        for attr in essential_attrs:
-            if hasattr(processor, attr):
-                setattr(inference_processor, attr, getattr(processor, attr))
+        # XGBoostFeatureProcessor의 transform 사용 (일관된 전처리)
+        test_processed = processor.transform(test)
 
-        print("   Converted TrainingFeatureProcessor to InferenceFeatureProcessor")
+        # 피처 순서 맞추기
+        test_processed = test_processed[feature_names]
 
-    # 전처리 적용
-    test_processed = inference_processor.transform(test.copy())
-    print(f"✅ Test data processed: {test_processed.shape}")
+        print(f"Test data processed: {test_processed.shape}")
 
-    # 피처 순서 맞추기
-    test_processed = test_processed[feature_names]
+        return test_processed, test_ids, feature_names
 
-    # 메모리 최적화
-    for col in test_processed.columns:
-        if test_processed[col].dtype == 'int64':
-            test_processed[col] = test_processed[col].astype('int32')
-        elif test_processed[col].dtype == 'float64':
-            test_processed[col] = test_processed[col].astype('float32')
+    except Exception as e:
+        raise RuntimeError(f"Failed to load and process test data: {e}")
 
-    # 예측 생성
-    print("🔮 Generating predictions...")
-    predictions = model.predict(
-        test_processed.values,
-        num_iteration=metadata['best_iteration']
-    )
 
-    print(f"✅ Predictions generated: {len(predictions):,}")
+def predict_kfold_ensemble():
+    """K-fold 앙상블 예측"""
+    print("Starting LightGBM K-Fold ensemble prediction...")
 
-    # 예측 결과 검증
-    print("🔍 Validating predictions...")
+    try:
+        # 최신 K-fold 모델 디렉토리 찾기
+        if not os.path.exists(CHECKPOINT_DIR):
+            raise FileNotFoundError(f"Checkpoint directory not found: {CHECKPOINT_DIR}")
 
-    # 1. 범위 검증 (0-1 사이)
-    if np.any((predictions < 0) | (predictions > 1)):
-        invalid_count = np.sum((predictions < 0) | (predictions > 1))
-        print(f"⚠️  Warning: {invalid_count} predictions outside [0,1] range")
+        kfold_dirs = [d for d in os.listdir(CHECKPOINT_DIR) if "kfold" in d]
+
+        if not kfold_dirs:
+            raise FileNotFoundError("No K-fold models found. Run K-fold training first.")
+
+        # 최신 K-fold 디렉토리
+        latest_kfold = max(
+            kfold_dirs, key=lambda x: os.path.getctime(os.path.join(CHECKPOINT_DIR, x))
+        )
+        kfold_dir = os.path.join(CHECKPOINT_DIR, latest_kfold)
+
+        print(f"Using K-fold models from: {kfold_dir}")
+
+        # 모델들 로드
+        models = load_kfold_models(kfold_dir)
+
+        # 테스트 데이터 로드
+        test_processed, test_ids, feature_names = load_test_data()
+
+        # 예측 생성 (메모리 효율적)
+        print("Generating ensemble predictions...")
+        predictions = np.zeros(len(test_processed))
+
+        for i, model in enumerate(models):
+            print(f"  Predicting with fold {i+1}/{len(models)}...")
+
+            # 예측 및 집계
+            fold_pred = model.predict(test_processed.values, num_iteration=model.best_iteration)
+            predictions += fold_pred / len(models)
+
+        print(f"Ensemble predictions generated: {len(predictions):,}")
+
+        # 예측 결과 정규화
         predictions = np.clip(predictions, 0, 1)
-        print("   Clipped to valid range")
+        predictions = np.nan_to_num(predictions, nan=0.5)
 
-    # 2. NaN/Inf 검증
-    if np.any(~np.isfinite(predictions)):
-        nan_count = np.sum(~np.isfinite(predictions))
-        print(f"⚠️  Warning: {nan_count} NaN/Inf predictions found")
-        predictions = np.nan_to_num(predictions, nan=0.5, posinf=1.0, neginf=0.0)
-        print("   Replaced with safe values")
+        # Submission 파일 생성
+        print("Creating submission file...")
+        os.makedirs(SUBMISSION_DIR, exist_ok=True)
 
-    # 3. 예측 분포 검증
-    mean_pred = predictions.mean()
-    if mean_pred < 0.001 or mean_pred > 0.999:
-        print(f"⚠️  Warning: Unusual prediction mean {mean_pred:.6f}")
+        # 제출 데이터 생성
+        if os.path.exists(SAMPLE_SUBMISSION_PATH):
+            submit = pd.read_csv(SAMPLE_SUBMISSION_PATH)
+            submit["clicked"] = predictions
+        else:
+            # 샘플이 없으면 직접 생성
+            if test_ids is not None:
+                submit = pd.DataFrame({"ID": test_ids, "clicked": predictions})
+            else:
+                submit = pd.DataFrame(
+                    {"ID": range(len(predictions)), "clicked": predictions}
+                )
 
-    print("✅ Validation complete")
+        # 파일명 생성 및 저장
+        timestamp = datetime.now().strftime("%m%d_%H%M")
+        output_path = f"{SUBMISSION_DIR}/lightgbm_kfold_{timestamp}.csv"
+        submit.to_csv(output_path, index=False)
 
-    # Submission 생성
-    print("📝 Creating submission...")
+        # 결과 출력
+        print(f"\nSubmission saved: {output_path}")
+        print(f"Prediction stats:")
+        print(f"  Count: {len(predictions):,}")
+        print(f"  Min: {predictions.min():.6f}")
+        print(f"  Max: {predictions.max():.6f}")
+        print(f"  Mean: {predictions.mean():.6f}")
+        print(f"  Std: {predictions.std():.6f}")
 
-    # 실험별 고유 파일명 생성
-    timestamp = datetime.now().strftime('%m%d_%H%M')
-    if 'models/lightgbm' in model_path:
-        exp_name = os.path.basename(os.path.dirname(model_path))
-        file_suffix = f"{exp_name}_{timestamp}"
-    else:
-        file_suffix = f"manual_{timestamp}"
+        return predictions, output_path
 
-    if os.path.exists('submissions/sample_submission.csv'):
-        submit_path = 'submissions/sample_submission.csv'
-        base_dir = 'submissions/lightgbm'
-    else:
-        submit_path = '../submissions/sample_submission.csv'
-        base_dir = '../submissions/lightgbm'
+    except Exception as e:
+        raise RuntimeError(f"Prediction failed: {e}")
 
-    # lightgbm 하위 폴더 생성
-    os.makedirs(base_dir, exist_ok=True)
-    output_path = f'{base_dir}/lightgbm_{file_suffix}.csv'
 
-    submit = pd.read_csv(submit_path)
-    submit['clicked'] = predictions
-    submit.to_csv(output_path, index=False)
-
-    print(f"\n🎯 Submission saved: {output_path}")
-    print(f"📊 Prediction stats:")
-    print(f"  Count: {len(predictions):,}")
-    print(f"  Min: {predictions.min():.6f}")
-    print(f"  Max: {predictions.max():.6f}")
-    print(f"  Mean: {predictions.mean():.6f}")
-    print(f"  Std: {predictions.std():.6f}")
-
-    return predictions
+def main():
+    """메인 실행 함수"""
+    try:
+        predictions, output_path = predict_kfold_ensemble()
+        print("\nLightGBM K-Fold ensemble prediction completed successfully!")
+        return predictions, output_path
+    except Exception as e:
+        print(f"\nError: {e}")
+        import traceback
+        traceback.print_exc()
+        return None, None
 
 
 if __name__ == "__main__":
-    try:
-        predictions = predict_with_lightgbm()
-        print("\\n🏆 Prediction completed successfully!")
-    except Exception as e:
-        print(f"\\n❌ Error: {e}")
-        import traceback
-        traceback.print_exc()
+    main()
