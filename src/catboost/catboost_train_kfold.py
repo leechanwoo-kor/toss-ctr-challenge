@@ -30,50 +30,56 @@ CATBOOST_WANDB_CONFIG_RUN = {
 
 
 def load_prepared_data():
-    """Load prepared training and validation data"""
+    """Load prepared training and validation data (XGBoost와 동일한 데이터 사용)"""
     print("📁 Loading prepared data...")
 
-    data_dir = 'data/processed/xgboost_enhanced'
+    data_dir = 'data/processed/xgboost'  # XGBoost와 동일한 데이터 사용
 
     # 데이터 파일 존재 확인
     required_files = ['X_train.npy', 'X_val.npy', 'y_train.npy', 'y_val.npy',
                       'metadata.pkl', 'processor.pkl', 'feature_names.pkl']
     for file in required_files:
         if not os.path.exists(os.path.join(data_dir, file)):
-            raise FileNotFoundError(f"Required file not found: {file}. Run 'python -m src.xgboost.xgboost_prepare_data_enhanced' first.")
+            raise FileNotFoundError(f"Required file not found: {file}. Run 'python -m src.xgboost.xgboost_prepare_data' first.")
 
-    # 데이터 로드
-    X_train = np.load(f'{data_dir}/X_train.npy')
-    X_val = np.load(f'{data_dir}/X_val.npy')
-    y_train = np.load(f'{data_dir}/y_train.npy')
-    y_val = np.load(f'{data_dir}/y_val.npy')
+    try:
+        # 피처명 먼저 로드
+        with open(f'{data_dir}/feature_names.pkl', 'rb') as f:
+            feature_names = pickle.load(f)
 
-    # 피처명 로드
-    with open(f'{data_dir}/feature_names.pkl', 'rb') as f:
-        feature_names = pickle.load(f)
+        # 데이터를 바로 DataFrame으로 로드 (메모리 효율적)
+        train_X = pd.DataFrame(
+            np.load(f'{data_dir}/X_train.npy'), columns=feature_names
+        )
+        val_X = pd.DataFrame(
+            np.load(f'{data_dir}/X_val.npy'), columns=feature_names
+        )
+        train_y = pd.Series(np.load(f'{data_dir}/y_train.npy'))
+        val_y = pd.Series(np.load(f'{data_dir}/y_val.npy'))
 
-    # pandas DataFrame으로 변환 (K-fold를 위해)
-    train_X = pd.DataFrame(X_train, columns=feature_names)
-    train_y = pd.Series(y_train)
-    val_X = pd.DataFrame(X_val, columns=feature_names)
-    val_y = pd.Series(y_val)
+        # 프로세서 로드
+        with open(f'{data_dir}/processor.pkl', 'rb') as f:
+            processor = pickle.load(f)
 
-    # 메타데이터 로드
-    with open(f'{data_dir}/metadata.pkl', 'rb') as f:
-        metadata = pickle.load(f)
+    except Exception as e:
+        raise RuntimeError(f"Failed to load prepared data: {e}")
 
     print(f"Train: {train_X.shape}, Val: {val_X.shape}")
     print(f"Features: {len(feature_names)}")
 
-    return train_X, train_y, val_X, val_y, feature_names, metadata
+    return train_X, train_y, val_X, val_y, feature_names, processor
 
 
-def get_categorical_features(feature_names):
-    """Get categorical feature indices for CatBoost"""
+def get_categorical_features(feature_names, processor):
+    """Get categorical feature indices for CatBoost (프로세서에서 자동 감지)"""
     categorical_features = []
+    categorical_feature_names = processor.categorical_features
+
     for i, name in enumerate(feature_names):
-        if name in ['gender', 'age_group', 'inventory_id', 'hour']:
+        if name in categorical_feature_names:
             categorical_features.append(i)
+
+    print(f"Categorical features found: {[feature_names[i] for i in categorical_features]}")
     return categorical_features
 
 
@@ -278,12 +284,12 @@ def main():
 
     # Load data
     load_start = time.time()
-    X, y, val_X, val_y, feature_names, metadata = load_prepared_data()
+    X, y, val_X, val_y, feature_names, processor = load_prepared_data()
     load_time = time.time() - load_start
     print(f"Data loaded in {load_time:.2f} seconds")
 
-    # Get categorical features
-    categorical_features = get_categorical_features(feature_names)
+    # Get categorical features from processor
+    categorical_features = get_categorical_features(feature_names, processor)
     print(f"Categorical features: {categorical_features}")
 
     # Initialize wandb

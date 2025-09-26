@@ -35,6 +35,7 @@ class DeepFMProcessor:
         self.inventory_popularity = {}
         self.age_inventory_affinity = {}
         self.gender_inventory_affinity = {}
+        self.inventory_frequency_map = {}
 
     def fit_transform(self, df):
         """훈련 데이터 처리 및 프로세서 학습"""
@@ -63,19 +64,11 @@ class DeepFMProcessor:
         print("🏪 Creating EDA features...")
         df = self._create_eda_features(df, is_training=True)
 
-        # 3. 시퀀스 피처 처리 (우리가 만든 utils 사용)
+        # 3. 시퀀스 피처 처리 - DISABLED (순수 DeepFM 테스트)
         if 'seq' in df.columns:
-            print("📈 Processing sequence features...")
-            seq_features = process_sequence_features(df['seq'])
-
-            # 기존 seq 컬럼 제거 후 새 피처 추가
+            print("📈 Removing sequence column (pure DeepFM test)...")
             df = df.drop('seq', axis=1)
-
-            # 인덱스 맞춰서 결합
-            seq_features.index = df.index
-            df = pd.concat([df, seq_features], axis=1)
-
-            print(f"   Added {seq_features.shape[1]} sequence statistical features")
+            print("   Sequence column removed - using only categorical/numerical features")
 
         # 4. 수치형 피처 정의
         excluded_cols = {'clicked'}.union(set(self.categorical_features))
@@ -126,14 +119,10 @@ class DeepFMProcessor:
         print("   Creating EDA features...")
         df = self._create_eda_features(df, is_training=False)
 
-        # 2. 시퀀스 피처 처리
+        # 2. 시퀀스 피처 처리 - DISABLED (순수 DeepFM 테스트)
         if 'seq' in df.columns:
-            print("   Processing sequence features...")
-            seq_features = process_sequence_features(df['seq'])
-
+            print("   Removing sequence column (pure DeepFM test)...")
             df = df.drop('seq', axis=1)
-            seq_features.index = df.index
-            df = pd.concat([df, seq_features], axis=1)
 
         # 3. 범주형 피처 인코딩 (학습된 인코더 사용)
         print("   Encoding categorical features...")
@@ -141,10 +130,13 @@ class DeepFMProcessor:
             if col in df.columns:
                 df[col] = df[col].fillna('unknown').astype(str)
 
-                # 새로운 카테고리는 'unknown'으로 처리
+                # 새로운 카테고리는 가장 빈도 높은 클래스로 처리 (unknown이 classes_에 없을 수 있음)
                 unknown_mask = ~df[col].isin(self.categorical_encoders[col].classes_)
                 if unknown_mask.sum() > 0:
-                    df.loc[unknown_mask, col] = 'unknown'
+                    # 첫 번째 클래스 (가장 빈도 높은 값)로 대체
+                    most_frequent_class = self.categorical_encoders[col].classes_[0]
+                    df.loc[unknown_mask, col] = most_frequent_class
+                    print(f"   {col}: {unknown_mask.sum()} unknown values mapped to '{most_frequent_class}'")
 
                 df[col] = self.categorical_encoders[col].transform(df[col])
 
@@ -177,15 +169,23 @@ class DeepFMProcessor:
         has_inventory = 'inventory_id' in df.columns
         has_clicked = 'clicked' in df.columns
 
-        # 1. Inventory popularity (인기도 순위)
+        # 1. Inventory popularity & frequency features
         if has_inventory:
-            if is_training and has_clicked:
+            if is_training:
                 inventory_counts = df.groupby('inventory_id').size()
                 self.inventory_popularity = inventory_counts.rank(ascending=False).to_dict()
+                self.inventory_frequency_map = inventory_counts.to_dict()
 
             df['inventory_popularity_rank'] = df['inventory_id'].map(
                 self.inventory_popularity
             ).fillna(len(self.inventory_popularity) // 2).astype(np.float32)
+
+            # NEW: Inventory frequency features
+            df['inventory_frequency'] = df['inventory_id'].map(
+                self.inventory_frequency_map
+            ).fillna(1).astype(np.float32)
+
+            df['inventory_log_frequency'] = np.log1p(df['inventory_frequency']).astype(np.float32)
 
         # 2. Gender-Age combination
         if has_gender and has_age_group:
@@ -214,6 +214,20 @@ class DeepFMProcessor:
             df['gender_inventory_affinity'] = pd.Series(gender_inventory_key, index=df.index).map(
                 self.gender_inventory_affinity
             ).fillna(len(df['inventory_id'].unique()) // 2).astype(np.float32)
+
+        # 5. NEW: Time cyclical encoding features
+        if 'hour' in df.columns:
+            # Ensure hour is numeric and handle any data type issues
+            df['hour'] = pd.to_numeric(df['hour'], errors='coerce').fillna(12).astype(int)
+            df['hour'] = df['hour'].clip(0, 23)  # Ensure valid hour range
+
+            # Create cyclical features using numeric values
+            hour_numeric = df['hour'].astype(float)
+            df['hour_sin'] = np.sin(2 * np.pi * hour_numeric / 24).astype(np.float32)
+            df['hour_cos'] = np.cos(2 * np.pi * hour_numeric / 24).astype(np.float32)
+
+            # Convert back to string format for categorical encoding consistency
+            df['hour'] = df['hour'].astype(str).str.zfill(2)  # 0 -> '00', 1 -> '01'
 
         return df
 

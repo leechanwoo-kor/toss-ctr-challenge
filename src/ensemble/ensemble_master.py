@@ -31,18 +31,18 @@ class EnsembleMaster:
     """통합 앙상블 마스터 클래스"""
 
     def __init__(self):
-        # 모델 성능 정보
+        # 모델 성능 정보 (실제 LB 제출 점수 기준)
         self.model_performance = {
-            'xgboost': {'cv_score': 0.3554, 'weight_base': 1.0},
-            'catboost': {'cv_score': 0.3525, 'weight_base': 0.85},
-            'deepfm': {'cv_score': 0.351, 'weight_base': 0.85}
+            'xgboost_kfold': {'lb_score': 0.348353, 'weight': 1.0},    # XGBoost K-Fold 제출 점수
+            'deepfm_kfold': {'lb_score': 0.342645, 'weight': 0.70},    # DeepFM K-Fold 제출 점수
+            'deepfm_single': {'lb_score': 0.341708, 'weight': 0.65},   # DeepFM Single 제출 점수
         }
 
-        # 기본 파일 경로 (프로젝트 루트 기준)
+        # 기본 파일 경로 (자동 탐지 우선)
         self.model_paths = {
-            'xgboost': 'submissions/xgboost/xgboost_kfold_0922_1500.csv',
-            'catboost': 'submissions/catboost/submission_catboost_catboost-kfold-0920_0228_20250920_024927.csv',
-            'deepfm': 'submissions/deepfm/deepfm_simplified_predictions_0923_1432.csv'
+            'xgboost_kfold': 'xgboost_kfold_0925_1012.csv',
+            'deepfm_kfold': 'deepfm_kfold_ensemble_20250926_150.csv',
+            'deepfm_single': 'deepfm_new_predictions_20250926_095618.csv'
         }
 
         self.predictions = {}
@@ -78,24 +78,38 @@ class EnsembleMaster:
     def _find_alternative(self, model_name):
         """대안 파일 찾기"""
         search_dirs = {
-            'xgboost': 'submissions/xgboost/',
-            'catboost': 'submissions/catboost/',
-            'deepfm': 'submissions/deepfm/'
+            'xgboost_kfold': ['submissions/xgboost/', './'],
+            'deepfm_kfold': ['submissions/deepfm/', './'],
+            'deepfm_single': ['submissions/deepfm/', './']
         }
 
-        search_dir = search_dirs.get(model_name)
-        if not search_dir or not os.path.exists(search_dir):
-            return None
+        # 검색할 키워드 매핑
+        search_keywords = {
+            'xgboost_kfold': ['xgboost_kfold'],
+            'deepfm_kfold': ['deepfm_kfold_ensemble'],
+            'deepfm_single': ['deepfm_new_predictions']
+        }
 
-        # 해당 모델 파일들 찾기
-        files = []
-        for f in os.listdir(search_dir):
-            if f.endswith('.csv') and model_name in f.lower():
-                files.append(f)
+        search_paths = search_dirs.get(model_name, [])
+        keywords = search_keywords.get(model_name, [model_name])
 
-        if files:
-            latest_file = max(files, key=lambda x: os.path.getmtime(os.path.join(search_dir, x)))
-            return os.path.join(search_dir, latest_file)
+        # 모든 검색 경로에서 파일 찾기
+        for search_dir in search_paths:
+            if not os.path.exists(search_dir):
+                continue
+
+            files = []
+            for f in os.listdir(search_dir):
+                if f.endswith('.csv'):
+                    # 키워드 중 하나라도 매치되면 추가
+                    for keyword in keywords:
+                        if keyword.lower() in f.lower():
+                            files.append(f)
+                            break
+
+            if files:
+                latest_file = max(files, key=lambda x: os.path.getmtime(os.path.join(search_dir, x)))
+                return os.path.join(search_dir, latest_file)
 
         return None
 
@@ -103,8 +117,9 @@ class EnsembleMaster:
         """예측 파일들 검증"""
         print("Validating predictions...")
 
-        # ID 일치성 확인
-        reference_ids = self.predictions['xgboost']['df']['ID'].values
+        # ID 일치성 확인 (첫 번째 모델을 기준으로)
+        first_model = list(self.predictions.keys())[0]
+        reference_ids = self.predictions[first_model]['df']['ID'].values
 
         for model_name, data in self.predictions.items():
             current_ids = data['df']['ID'].values
@@ -117,33 +132,75 @@ class EnsembleMaster:
         print("Validation complete")
 
     def run_weighted_ensemble(self):
-        """가중평균 앙상블 실행"""
+        """최적화된 가중평균 앙상블"""
         print("\n=== WEIGHTED ENSEMBLE ===")
 
-        # 다양한 가중치 조합
-        weight_combinations = [
-            ([0.55, 0.30, 0.15], "xgb_dominant"),
-            ([0.50, 0.35, 0.15], "performance_focused"),
-            ([0.45, 0.35, 0.20], "balanced"),
-            ([0.40, 0.40, 0.20], "conservative"),
-            ([0.35, 0.35, 0.30], "equal_importance")
-        ]
+        available_models = list(self.predictions.keys())
+        print(f"Available models: {available_models}")
 
-        model_names = ['xgboost', 'catboost', 'deepfm']
+        # 성능 기반 자동 가중치 계산
+        model_scores = {}
+        for model in available_models:
+            if model in self.model_performance:
+                model_scores[model] = self.model_performance[model]['lb_score']
+            else:
+                model_scores[model] = 0.34  # 기본값
+
+        print(f"Model scores: {model_scores}")
+
+        # 스마트 가중치 조합 생성
+        if len(available_models) == 2:
+            # 2개 모델: 성능 비율 기반
+            best_model = max(model_scores.keys(), key=lambda x: model_scores[x])
+            worst_model = min(model_scores.keys(), key=lambda x: model_scores[x])
+
+            weight_combinations = [
+                # 성능 차이에 따른 가중치
+                ([0.80, 0.20], "performance_80_20"),
+                ([0.75, 0.25], "performance_75_25"),
+                ([0.70, 0.30], "performance_70_30"),
+                ([0.65, 0.35], "performance_65_35"),
+                ([0.60, 0.40], "performance_60_40"),
+                ([0.50, 0.50], "equal_weight"),
+            ]
+            model_names = [best_model, worst_model]
+
+        else:
+            # 3개 이상: 균등 + 성능 기반
+            sorted_models = sorted(available_models, key=lambda x: model_scores[x], reverse=True)
+            model_names = sorted_models
+
+            if len(model_names) == 3:
+                weight_combinations = [
+                    ([0.60, 0.25, 0.15], "best_heavy"),
+                    ([0.50, 0.30, 0.20], "best_moderate"),
+                    ([0.40, 0.35, 0.25], "balanced"),
+                    ([1/3, 1/3, 1/3], "equal_three"),
+                ]
+            else:
+                # 균등 가중치만
+                equal_weight = 1.0 / len(model_names)
+                weight_combinations = [
+                    ([equal_weight] * len(model_names), "equal_all"),
+                ]
+
+        print(f"Using models: {model_names}")
 
         for weights, name in weight_combinations:
             # 가중 평균 계산
-            ensemble_preds = np.zeros_like(self.predictions['xgboost']['preds'])
+            first_model = model_names[0]
+            ensemble_preds = np.zeros_like(self.predictions[first_model]['preds'])
 
             for i, model_name in enumerate(model_names):
-                ensemble_preds += weights[i] * self.predictions[model_name]['preds']
+                if i < len(weights):  # 가중치 개수와 매치
+                    ensemble_preds += weights[i] * self.predictions[model_name]['preds']
 
-            # 예상 성능 계산
-            expected_score = sum(weights[i] * self.model_performance[model_names[i]]['cv_score']
-                               for i in range(3))
+            # 예상 성능 계산 (가중 평균)
+            expected_score = sum(weights[i] * model_scores[model_names[i]]
+                               for i in range(len(weights)) if i < len(model_names))
 
             # 결과 DataFrame
-            result_df = self.predictions['xgboost']['df'][['ID']].copy()
+            result_df = self.predictions[first_model]['df'][['ID']].copy()
             result_df['clicked'] = ensemble_preds
 
             self.results[f'weighted_{name}'] = {
@@ -155,19 +212,19 @@ class EnsembleMaster:
 
             print(f"{name}: Expected {expected_score:.4f}, Weights {weights}")
 
-        # 기하평균도 추가
+        # 기하평균도 추가 (사용 가능한 모든 모델)
         geometric_preds = np.exp(np.mean([
             np.log(np.clip(self.predictions[name]['preds'], 1e-8, 1-1e-8))
             for name in model_names
         ], axis=0))
 
-        result_df = self.predictions['xgboost']['df'][['ID']].copy()
+        result_df = self.predictions[first_model]['df'][['ID']].copy()
         result_df['clicked'] = geometric_preds
 
         self.results['weighted_geometric'] = {
             'dataframe': result_df,
-            'expected_score': np.mean([self.model_performance[name]['cv_score'] for name in model_names]),
-            'weights': [1/3, 1/3, 1/3],
+            'expected_score': np.mean([model_scores[name] for name in model_names]),
+            'weights': [1/len(model_names)] * len(model_names),
             'method': 'geometric_mean'
         }
 
@@ -244,7 +301,9 @@ class EnsembleMaster:
             else:
                 stacking_pred = meta_info['model'].predict(X_meta_test)
 
-            result_df = self.predictions['xgboost']['df'][['ID']].copy()
+            # 첫 번째 사용 가능한 모델의 ID 사용
+            first_model = list(self.predictions.keys())[0]
+            result_df = self.predictions[first_model]['df'][['ID']].copy()
             result_df['clicked'] = stacking_pred
 
             expected_score = 0.350 + (meta_info['auc'] - 0.7) * 0.1  # 대략적 추정

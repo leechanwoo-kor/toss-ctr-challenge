@@ -64,32 +64,27 @@ def predict_with_catboost(model_dir_path=None, experiment_name=None):
         test_df = test_df.drop(columns=['ID'])
         print("✅ Backed up and removed ID column")
 
-    # 피처 프로세서 로드 (학습시 사용된 것)
+    # 피처 프로세서 로드 (XGBoost와 동일한 경로)
     print("🔧 Loading feature processor...")
-    processor_path = 'data/processed/xgboost_processed/processor.pkl'
+    processor_path = 'data/processed/xgboost/processor.pkl'
     with open(processor_path, 'rb') as f:
         processor = pickle.load(f)
-
-    # inventory_id를 학습시와 동일한 문자열 타입으로 보장
-    if 'inventory_id' in test_df.columns:
-        test_df['inventory_id'] = test_df['inventory_id'].astype(str)
-        print("✅ Ensured inventory_id is string type")
 
     # 피처 처리
     print("🔄 Processing test features...")
     test_processed = processor.transform(test_df)
     print(f"Features processed: {test_processed.shape}")
 
-    # 범주형 피처를 문자열로 변환 (CatBoost 요구사항)
+    # 범주형 피처를 프로세서에서 자동으로 가져오기
     feature_names = list(test_processed.columns)
-    categorical_feature_names = ['gender', 'age_group', 'inventory_id', 'hour']
+    categorical_feature_names = processor.categorical_features
 
-    # 범주형 피처만 문자열로 변환 (인덱스 정보는 모델에서 자동 처리)
+    # 범주형 피처만 문자열로 변환 (CatBoost 요구사항)
     for name in categorical_feature_names:
         if name in test_processed.columns:
             test_processed[name] = test_processed[name].astype(str)
 
-    print(f"Categorical features converted: {categorical_feature_names}")
+    print(f"Categorical features converted: {[name for name in categorical_feature_names if name in test_processed.columns]}")
     print(f"Test data shape after processing: {test_processed.shape}")
     print(f"Feature names: {feature_names[:10]}...")  # 첫 10개 피처명 확인
 

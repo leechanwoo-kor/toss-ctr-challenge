@@ -98,22 +98,26 @@ XGBOOST_CONFIG = {
     "early_stopping_rounds": 20,
 }
 
-# CatBoost 현업 표준 설정 (CTR 최적화)
+# CatBoost 과적합 방지 설정 (2025/09/25 v2 - Anti-Overfitting)
 CATBOOST_CONFIG = {
-    "iterations": 300,                   # 트리 수
-    "learning_rate": 0.1,                # 학습률
-    "depth": 8,                         # 트리 깊이
-    "l2_leaf_reg": 3,                   # L2 정규화
-    "border_count": 128,                # 범주 경계
+    "iterations": 700,                  # 반복 줄이기 (1000 → 700, 과적합 방지)
+    "learning_rate": 0.03,              # 학습률 감소 (0.05 → 0.03, 더 천천히 학습)
+    "depth": 6,                         # 트리 깊이 감소 (8 → 6, 단순화)
+    "l2_leaf_reg": 25,                  # L2 정규화 강화 (10 → 25)
+    "border_count": 128,                # 분할점 줄이기 (254 → 128, 덜 정교한 분할)
+    "random_strength": 2,               # 랜덤성 증가 (1 → 2, 더 많은 노이즈)
     "thread_count": -1,                 # 멀티쓰레딩
     "random_seed": 42,                  # 재현성
     "loss_function": "Logloss",         # 손실함수
     "eval_metric": "AUC",               # 평가지표
-    "early_stopping_rounds": 30,        # 조기종료
+    "early_stopping_rounds": 50,        # 조기종료 엄격화 (100 → 50)
     "verbose": 50,                      # 로그 출력
     "use_best_model": True,             # 최적 모델 사용
     "task_type": "GPU",                 # GPU 사용
-    "class_weights": [1, 51.6],         # 클래스 불균형 (98.1/1.9)
+    "auto_class_weights": "Balanced",   # 클래스 불균형 자동 처리
+    "bootstrap_type": "Bernoulli",      # 부트스트랩 타입
+    "subsample": 0.7,                   # 샘플링 비율 강화 (0.8 → 0.7, 더 강한 배깅)
+    # "colsample_bylevel": 0.8,         # GPU 모드에서 미지원 - 제거
 }
 
 # CatBoost WandB 설정

@@ -149,12 +149,12 @@ def train_and_validate(trial, processor, device):
         optimizer, patience=3, factor=0.7
     )
 
-    # 조기 종료 설정
+    # 조기 종료 설정 (더 빠른 탐색)
     best_score = 0.0
     best_auc = 0.0
-    patience = 5
+    patience = 3    # 5 → 3 (더 빠른 조기 종료)
     patience_counter = 0
-    max_epochs = 15  # Optuna에서는 빠른 탐색을 위해 짧게
+    max_epochs = 8  # 15 → 8 (시간 절반으로 단축)
 
     # 훈련 루프
     for epoch in range(max_epochs):
@@ -309,7 +309,7 @@ def main():
     print(f"\n📊 Starting optimization: {study_name}")
     print(f"   Sampler: TPE")
     print(f"   Pruner: MedianPruner")
-    print(f"   Trials: 50 (약 3-4시간 예상)")
+    print(f"   Trials: 30 (약 8-10시간 예상 - 밤새 실행)")
 
     # WandB 초기화
     wandb.init(
@@ -342,7 +342,7 @@ def main():
     try:
         study.optimize(
             objective,
-            n_trials=50,  # 50회 시도
+            n_trials=30,  # 50 → 30회 (빠른 최적화)
             callbacks=[callback],
             show_progress_bar=True
         )

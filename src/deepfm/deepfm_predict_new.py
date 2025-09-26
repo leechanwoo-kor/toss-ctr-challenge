@@ -188,7 +188,7 @@ def main():
 
     # 저장 경로
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"deepfm_new_predictions_{timestamp}.csv"
+    filename = f"submissions/deepfm/deepfm_new_predictions_{timestamp}.csv"
 
     # 결과 통계
     print(f"📊 Prediction Statistics:")
