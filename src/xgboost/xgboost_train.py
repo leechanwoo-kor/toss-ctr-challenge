@@ -112,9 +112,9 @@ def train_kfold_xgboost(X, y, val_X, val_y, config, kfold_config):
             config,
             dtrain,
             num_boost_round=config["n_estimators"],
-            evals=watchlist,
-            early_stopping_rounds=config["early_stopping_rounds"],
-            verbose_eval=50,  # 50 iteration마다 출력
+            evals=[(dtrain, "train"), (dvalid, "valid")],
+            early_stopping_rounds=30,  # Optuna 최종 학습과 동일
+            verbose_eval=50,
         )
 
         models.append(model)

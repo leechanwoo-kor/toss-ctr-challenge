@@ -72,30 +72,30 @@ LIGHTGBM_WANDB_CONFIG = {
     "NOTES": "LightGBM with industry standard hyperparams for CTR prediction",
 }
 
-# XGBoost Optuna 최적화 설정 (0.355654 달성 - 9/24 Trial 75)
+# XGBoost Optuna 최적화 설정 (0.355769 달성 - 9/28 Trial 64)
 XGBOOST_CONFIG = {
     "objective": "binary:logistic",
-    "eval_metric": "auc",
+    "eval_metric": "logloss",
     "booster": "gbtree",
     "device": "cuda:0",                  # GPU 가속
     "tree_method": "hist",               # 히스토그램 방식
-    "max_depth": 8,                      # Trial 75 최적값
-    "learning_rate": 0.05955422983797188, # Trial 75 최적값 (더 안정적)
-    "n_estimators": 325,                 # Trial 75 최적값 (충분한 학습)
-    "min_child_weight": 169,             # Trial 75 최적값 (강력한 과적합 방지)
-    "reg_alpha": 0.03622340097891742,    # Trial 75 최적값 (L1 정규화)
-    "reg_lambda": 6.672525788694994,     # Trial 75 최적값 (강력한 L2 정규화)
-    "subsample": 0.9763655879223412,     # Trial 75 최적값 (높은 샘플 활용)
-    "colsample_bytree": 0.8873768149476484, # Trial 75 최적값 (특성 활용)
-    "colsample_bylevel": 0.8904543884294897, # Trial 75 최적값 (레벨별 샘플링)
-    "colsample_bynode": 0.8870357675572318,  # Trial 75 최적값 (노드별 샘플링)
-    "gamma": 0.6334784828161101,         # Trial 75 최적값 (분할 제약)
-    "max_delta_step": 9,                 # Trial 75 최적값 (안정성)
+    "max_depth": 9,                      # Trial 64 최적값
+    "learning_rate": 0.05008826604937745, # Trial 64 최적값
+    "n_estimators": 375,                 # Trial 64 최적값
+    "min_child_weight": 191,             # Trial 64 최적값
+    "reg_alpha": 0.3901451531725555,     # Trial 64 최적값 (L1 정규화)
+    "reg_lambda": 0.26805338049519767,   # Trial 64 최적값 (L2 정규화)
+    "subsample": 0.9999176593328056,     # Trial 64 최적값
+    "colsample_bytree": 0.8338866788535406, # Trial 64 최적값
+    "colsample_bylevel": 0.8048444047762913, # Trial 64 최적값
+    "colsample_bynode": 0.8602187704339929,  # Trial 64 최적값
+    "gamma": 4.578347337117214,          # Trial 64 최적값
+    "max_delta_step": 5,                 # Trial 64 최적값
     "scale_pos_weight": 51.6,            # 클래스 불균형 (98.1/1.9)
     "random_state": 42,
     "n_jobs": -1,
     "verbosity": 0,
-    "early_stopping_rounds": 20,
+    "early_stopping_rounds": 30,
 }
 
 # CatBoost 과적합 방지 설정 (2025/09/25 v2 - Anti-Overfitting)

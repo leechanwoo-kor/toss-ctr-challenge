@@ -29,8 +29,8 @@ DATA_DIR = "data/processed/xgboost"
 CHECKPOINT_DIR = "checkpoints/xgboost"
 OPTUNA_STUDIES_DIR = "optuna_studies"
 TARGET_SCORE = 0.35
-N_TRIALS = 100  # 더 많은 trial로 정밀 탐색
-TIMEOUT_HOURS = 6  # 충분한 탐색 시간
+N_TRIALS = 150  # Extended search for better optimization
+TIMEOUT_HOURS = 8  # 더 긴 탐색 시간으로 정밀 최적화
 
 
 def load_prepared_data():
@@ -78,8 +78,8 @@ def objective(trial):
 
     print(f"\nTrial {trial.number} starting...")
 
-    # 🎯 현재 최고 성능(0.355) 달성을 위한 정교한 하이퍼파라미터 탐색
-    # 베이스라인: max_depth=6, learning_rate=0.1, n_estimators=200 주변 탐색
+    # 🎯 Trial 64 최적 파라미터 (0.355800) 기준 Fine-tuning
+    # 각 파라미터를 최적값 주변에서 정밀 탐색
     params = {
         "objective": "binary:logistic",
         "eval_metric": "logloss",
@@ -87,25 +87,25 @@ def objective(trial):
         "device": "cuda:0",
         "tree_method": "hist",
 
-        # Core hyperparameters - 더 집중적인 탐색
-        "max_depth": trial.suggest_int("max_depth", 5, 9),  # 깊이를 조금 더 다양하게
-        "learning_rate": trial.suggest_float("learning_rate", 0.05, 0.2, log=True),  # log scale로 더 넓게
-        "n_estimators": trial.suggest_int("n_estimators", 100, 400, step=25),  # 더 넓은 범위
+        # Core hyperparameters - Trial 64 주변 fine-tuning
+        "max_depth": trial.suggest_int("max_depth", 8, 10),  # 9 ±1
+        "learning_rate": trial.suggest_float("learning_rate", 0.04, 0.06),  # 0.050 ±0.01
+        "n_estimators": trial.suggest_int("n_estimators", 350, 400, step=25),  # 375 ±25
 
-        # Regularization - 과적합 방지를 위한 정교한 조정
-        "min_child_weight": trial.suggest_int("min_child_weight", 10, 200),  # 더 넓은 범위
-        "reg_alpha": trial.suggest_float("reg_alpha", 0.001, 1.0, log=True),  # L1 정규화 강화
-        "reg_lambda": trial.suggest_float("reg_lambda", 0.001, 10.0, log=True),  # L2 정규화 강화
+        # Regularization - 최적값 주변 정밀 탐색
+        "min_child_weight": trial.suggest_int("min_child_weight", 170, 210),  # 191 ±20
+        "reg_alpha": trial.suggest_float("reg_alpha", 0.2, 0.6),  # 0.390 ±0.2
+        "reg_lambda": trial.suggest_float("reg_lambda", 0.15, 0.4),  # 0.268 ±0.12
 
-        # Sampling parameters - 일반화 성능 향상
-        "subsample": trial.suggest_float("subsample", 0.7, 1.0),  # 더 넓은 범위
-        "colsample_bytree": trial.suggest_float("colsample_bytree", 0.7, 1.0),
-        "colsample_bylevel": trial.suggest_float("colsample_bylevel", 0.7, 1.0),
-        "colsample_bynode": trial.suggest_float("colsample_bynode", 0.7, 1.0),  # 추가 sampling
+        # Sampling parameters - 최적값 주변 미세 조정
+        "subsample": trial.suggest_float("subsample", 0.95, 1.0),  # 0.999 근처
+        "colsample_bytree": trial.suggest_float("colsample_bytree", 0.8, 0.9),  # 0.834 ±0.05
+        "colsample_bylevel": trial.suggest_float("colsample_bylevel", 0.75, 0.85),  # 0.805 ±0.05
+        "colsample_bynode": trial.suggest_float("colsample_bynode", 0.82, 0.9),  # 0.860 ±0.04
 
-        # Advanced parameters
-        "gamma": trial.suggest_float("gamma", 0.0, 5.0),  # 최소 분할 손실
-        "max_delta_step": trial.suggest_int("max_delta_step", 0, 10),  # 불균형 데이터용
+        # Advanced parameters - 최적값 주변
+        "gamma": trial.suggest_float("gamma", 3.5, 5.5),  # 4.578 ±1
+        "max_delta_step": trial.suggest_int("max_delta_step", 4, 6),  # 5 ±1
 
         # Fixed parameters
         "scale_pos_weight": 51.6,  # 클래스 불균형 보정
