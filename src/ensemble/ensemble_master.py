@@ -40,7 +40,7 @@ class EnsembleMaster:
 
         # 기본 파일 경로 (자동 탐지 우선)
         self.model_paths = {
-            'xgboost_kfold': 'xgboost_kfold_0925_1012.csv',
+            'xgboost_kfold': 'xgboost_kfold_0928_1255.csv',
             'deepfm_kfold': 'deepfm_kfold_ensemble_20250926_150.csv',
             'deepfm_single': 'deepfm_new_predictions_20250926_095618.csv'
         }
