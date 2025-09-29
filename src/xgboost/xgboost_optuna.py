@@ -29,8 +29,8 @@ DATA_DIR = "data/processed/xgboost"
 CHECKPOINT_DIR = "checkpoints/xgboost"
 OPTUNA_STUDIES_DIR = "optuna_studies"
 TARGET_SCORE = 0.35
-N_TRIALS = 150  # Extended search for better optimization
-TIMEOUT_HOURS = 8  # 더 긴 탐색 시간으로 정밀 최적화
+N_TRIALS = 150  # Fine-tuning focused search
+TIMEOUT_HOURS = 10   # 집중적 정밀 탐색
 
 
 def load_prepared_data():
@@ -78,8 +78,8 @@ def objective(trial):
 
     print(f"\nTrial {trial.number} starting...")
 
-    # 🎯 Trial 64 최적 파라미터 (0.355800) 기준 Fine-tuning
-    # 각 파라미터를 최적값 주변에서 정밀 탐색
+    # 🎯 최적 파라미터 (0.355868) 기준 Fine-tuning Round 2
+    # Trial 30의 최적값 주변에서 더욱 정밀한 탐색
     params = {
         "objective": "binary:logistic",
         "eval_metric": "logloss",
@@ -87,24 +87,24 @@ def objective(trial):
         "device": "cuda:0",
         "tree_method": "hist",
 
-        # Core hyperparameters - Trial 64 주변 fine-tuning
+        # Core hyperparameters - 최적값 주변 ±10% 범위
         "max_depth": trial.suggest_int("max_depth", 8, 10),  # 9 ±1
-        "learning_rate": trial.suggest_float("learning_rate", 0.04, 0.06),  # 0.050 ±0.01
-        "n_estimators": trial.suggest_int("n_estimators", 350, 400, step=25),  # 375 ±25
+        "learning_rate": trial.suggest_float("learning_rate", 0.035, 0.050, log=False),  # 0.04176 ±20%
+        "n_estimators": trial.suggest_int("n_estimators", 375, 425, step=25),  # 400 ±25
 
-        # Regularization - 최적값 주변 정밀 탐색
-        "min_child_weight": trial.suggest_int("min_child_weight", 170, 210),  # 191 ±20
-        "reg_alpha": trial.suggest_float("reg_alpha", 0.2, 0.6),  # 0.390 ±0.2
-        "reg_lambda": trial.suggest_float("reg_lambda", 0.15, 0.4),  # 0.268 ±0.12
+        # Regularization - 정밀 범위 조정
+        "min_child_weight": trial.suggest_int("min_child_weight", 175, 215),  # 195 ±20
+        "reg_alpha": trial.suggest_float("reg_alpha", 0.15, 0.25),  # 0.200 ±25%
+        "reg_lambda": trial.suggest_float("reg_lambda", 0.12, 0.18),  # 0.150 ±20%
 
-        # Sampling parameters - 최적값 주변 미세 조정
-        "subsample": trial.suggest_float("subsample", 0.95, 1.0),  # 0.999 근처
-        "colsample_bytree": trial.suggest_float("colsample_bytree", 0.8, 0.9),  # 0.834 ±0.05
-        "colsample_bylevel": trial.suggest_float("colsample_bylevel", 0.75, 0.85),  # 0.805 ±0.05
-        "colsample_bynode": trial.suggest_float("colsample_bynode", 0.82, 0.9),  # 0.860 ±0.04
+        # Sampling parameters - 미세 조정 (±5% 범위)
+        "subsample": trial.suggest_float("subsample", 0.93, 1.0),  # 0.976 ±3%
+        "colsample_bytree": trial.suggest_float("colsample_bytree", 0.78, 0.86),  # 0.818 ±5%
+        "colsample_bylevel": trial.suggest_float("colsample_bylevel", 0.73, 0.81),  # 0.773 ±5%
+        "colsample_bynode": trial.suggest_float("colsample_bynode", 0.80, 0.89),  # 0.846 ±5%
 
-        # Advanced parameters - 최적값 주변
-        "gamma": trial.suggest_float("gamma", 3.5, 5.5),  # 4.578 ±1
+        # Advanced parameters - 좁은 범위 정밀 탐색
+        "gamma": trial.suggest_float("gamma", 4.0, 5.5),  # 4.656 ±15%
         "max_delta_step": trial.suggest_int("max_delta_step", 4, 6),  # 5 ±1
 
         # Fixed parameters
@@ -257,8 +257,8 @@ def main():
     print(f"K-Fold: {KFOLD_CONFIG['n_splits']}-fold Cross Validation")
 
     # 최적화 실행
-    print(f"Starting optimization with {N_TRIALS} trials...")
-    print(f"Strategy: Comprehensive hyperparameter search with advanced regularization")
+    print(f"Starting fine-tuning optimization with {N_TRIALS} trials...")
+    print(f"Strategy: Fine-tuning around best parameters (0.355868 baseline)")
     print(f"Timeout: {TIMEOUT_HOURS} hours")
 
     try:

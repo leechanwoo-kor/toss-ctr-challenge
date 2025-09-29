@@ -9,8 +9,8 @@ def main():
     print("=== XGBoost + DeepFM K-Fold 2-Model Ensemble ===")
 
     # 파일 경로
-    xgboost_file = "submissions/xgboost/xgboost_kfold_0928_1255.csv"
-    deepfm_file = "submissions/deepfm/deepfm_kfold_ensemble_20250926_150150.csv"
+    xgboost_file = "submissions/xgboost/xgboost_kfold_0929_2306.csv"
+    deepfm_file = "submissions/deepfm/deepfm_kfold_ensemble_20250929_230730.csv"
 
     # 데이터 로드
     print("Loading predictions...")
@@ -45,7 +45,7 @@ def main():
         result_df['clicked'] = ensemble_preds
 
         # 예상 점수 계산 (XGBoost 0.354678 CV 기준)
-        expected_score = xgb_weight * 0.355 + deepfm_weight * 0.343  # 대략적 추정
+        expected_score = xgb_weight * 0.349 + deepfm_weight * 0.342  # 대략적 추정
 
         filename = f"ensemble_xgb_deepfm_{name}_{timestamp}.csv"
         result_df.to_csv(f"submissions/{filename}", index=False)

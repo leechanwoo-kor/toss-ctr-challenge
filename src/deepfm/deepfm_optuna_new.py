@@ -87,26 +87,29 @@ def train_and_validate(trial, processor, device):
     """하나의 trial을 위한 훈련 및 검증"""
 
     # Hidden units 매핑
+    # 더 다양하고 균형잡힌 네트워크 구조
     hidden_units_options = {
-        0: [256, 128],
-        1: [512, 256, 128],
-        2: [512, 256, 128, 64],
-        3: [768, 512, 256],
-        4: [768, 512, 256, 128],
-        5: [1024, 512, 256],
+        0: [256, 128],              # 현재 설정 (baseline)
+        1: [400, 200],              # 중간 크기 얕은 구조
+        2: [512, 256, 128],         # 표준 깊은 구조
+        3: [400, 300, 200, 100],    # 점진적 감소 깊은 구조
+        4: [600, 300, 150],         # 중간 크기 3층
+        5: [512, 512, 256],         # 일정 크기 유지
+        6: [768, 384, 192],         # 큰 네트워크
+        7: [320, 160, 80],          # 작은 깊은 구조
     }
 
     # 하이퍼파라미터 제안
-    hidden_units_idx = trial.suggest_categorical('hidden_units_idx', [0, 1, 2, 3, 4, 5])
+    hidden_units_idx = trial.suggest_categorical('hidden_units_idx', [0, 1, 2, 3, 4, 5, 6, 7])
 
     params = {
-        'embedding_dim': trial.suggest_categorical('embedding_dim', [16, 24, 32, 48, 64]),
+        'embedding_dim': trial.suggest_categorical('embedding_dim', [8, 12, 16, 20, 24]),  # 더 작고 효율적인 범위
         'hidden_units': hidden_units_options[hidden_units_idx],
-        'dropout': trial.suggest_float('dropout', 0.1, 0.5, step=0.1),
-        'learning_rate': trial.suggest_float('learning_rate', 1e-4, 5e-3, log=True),
-        'batch_size': trial.suggest_categorical('batch_size', [1024, 2048, 4096]),
-        'weight_decay': trial.suggest_float('weight_decay', 1e-6, 1e-3, log=True),
-        'pos_weight': trial.suggest_float('pos_weight', 40.0, 70.0, step=5.0),
+        'dropout': trial.suggest_float('dropout', 0.1, 0.4, step=0.05),  # 더 세밀한 조정
+        'learning_rate': trial.suggest_float('learning_rate', 3e-4, 2e-3, log=True),  # 0.001 근처 집중 탐색
+        'batch_size': trial.suggest_categorical('batch_size', [512, 1024, 2048]),  # 4096 제거, 512 추가
+        'weight_decay': trial.suggest_float('weight_decay', 5e-7, 5e-4, log=True),  # 더 넓은 범위
+        'pos_weight': 51.6,  # 클래스 불균형 비율로 고정 (98.1/1.9)
     }
 
     print(f"\n🧪 Trial {trial.number}: Testing hyperparameters...")
@@ -137,24 +140,27 @@ def train_and_validate(trial, processor, device):
         seed=42
     )
 
+    # 조기 종료 설정 (충분한 학습)
+    max_epochs = 15  # 충분한 학습 시간
+    best_score = 0.0
+    best_auc = 0.0
+    patience = 5    # 더 관대한 조기 종료
+    patience_counter = 0
+
     # 최적화 설정
-    pos_weight_tensor = torch.tensor([params['pos_weight']]).to(device)
+    pos_weight_tensor = torch.tensor([51.6]).to(device)  # 고정된 클래스 불균형 비율
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight_tensor)
     optimizer = optim.AdamW(
         model.parameters(),
         lr=params['learning_rate'],
         weight_decay=params['weight_decay']
     )
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, patience=3, factor=0.7
+    # CosineAnnealingLR 사용 (DeepFM에서 효과적)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=max_epochs,  # 전체 에폭 수에 맞춤
+        eta_min=params['learning_rate'] * 0.01  # 최소 학습률은 초기의 1%
     )
-
-    # 조기 종료 설정 (더 빠른 탐색)
-    best_score = 0.0
-    best_auc = 0.0
-    patience = 3    # 5 → 3 (더 빠른 조기 종료)
-    patience_counter = 0
-    max_epochs = 8  # 15 → 8 (시간 절반으로 단축)
 
     # 훈련 루프
     for epoch in range(max_epochs):
@@ -220,7 +226,7 @@ def train_and_validate(trial, processor, device):
         comp_score = metrics['comp_score']
         auc = metrics['auc']
 
-        scheduler.step(train_loss)
+        scheduler.step()  # CosineAnnealingLR은 에폭 단위로 동작
 
         # 로깅 (첫 번째와 마지막 에포크만)
         if epoch == 0 or epoch == max_epochs - 1 or comp_score > best_score:
@@ -342,9 +348,10 @@ def main():
     try:
         study.optimize(
             objective,
-            n_trials=30,  # 50 → 30회 (빠른 최적화)
+            n_trials=50,  # 50회로 더 철저한 탐색
             callbacks=[callback],
-            show_progress_bar=True
+            show_progress_bar=True,
+            timeout=36000  # 10시간 제한
         )
     except KeyboardInterrupt:
         print("\n⚠️  Optimization interrupted by user")

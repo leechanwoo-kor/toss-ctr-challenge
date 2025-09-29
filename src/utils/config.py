@@ -27,7 +27,13 @@ DEEPFM_CONFIG = {
     "FOCAL_GAMMA": 2.0,  # Focal Loss gamma parameter
     "SEED": 42,
     "EARLY_STOPPING": 5,
-    "PATIENCE": 3,  # Early stopping patience
+    # Learning Rate Scheduler 설정
+    "SCHEDULER_TYPE": "cosine",  # cosine (안정적), cosine_restart (주기적 리셋), plateau
+    "COSINE_T_MAX": 30,  # CosineAnnealingLR T_max (전체 에포크 수)
+    "COSINE_T0": 5,  # CosineAnnealingWarmRestarts T_0 (restart 주기, cosine_restart 사용시)
+    "COSINE_ETA_MIN_RATIO": 0.01,  # 최소 LR = LR * ratio
+    # WandB 로깅 설정
+    "WANDB_LOG_INDIVIDUAL_FOLDS": False,  # False = 깔끔한 차트
 }
 
 # WandB 설정

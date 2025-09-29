@@ -129,20 +129,46 @@ def prepare_fold_data(train_indices, val_indices, full_categorical, full_numeric
             val_categorical, val_numerical, val_targets)
 
 
-def train_fold(model, train_loader, val_loader, device, fold_num, max_epochs=25):
+def train_fold(model, train_loader, val_loader, device, fold_num, max_epochs=None):
     """단일 폴드 훈련"""
     print(f"   Training fold {fold_num}...")
+
+    if max_epochs is None:
+        max_epochs = DEEPFM_CONFIG.get('EPOCHS', 30)
 
     # 하이퍼파라미터
     learning_rate = DEEPFM_CONFIG.get('LEARNING_RATE', 0.001)
     weight_decay = DEEPFM_CONFIG.get('WEIGHT_DECAY', 1e-5)
     pos_weight = DEEPFM_CONFIG.get('POS_WEIGHT', 51.6)
-    early_stopping_patience = 5  # 일반 학습과 동일하게 설정
+    early_stopping_patience = DEEPFM_CONFIG.get('EARLY_STOPPING', 5)
 
     pos_weight_tensor = torch.tensor([pos_weight]).to(device)
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight_tensor)
     optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=2, factor=0.7)
+
+    # Scheduler 설정 (config 기반)
+    scheduler_type = DEEPFM_CONFIG.get('SCHEDULER_TYPE', 'cosine')
+    if scheduler_type == 'cosine':
+        # CosineAnnealingLR - 안정적인 단일 코사인 감소
+        T_max = DEEPFM_CONFIG.get('COSINE_T_MAX', max_epochs)
+        eta_min_ratio = DEEPFM_CONFIG.get('COSINE_ETA_MIN_RATIO', 0.01)
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=T_max,
+            eta_min=learning_rate * eta_min_ratio
+        )
+    elif scheduler_type == 'cosine_restart':
+        # CosineAnnealingWarmRestarts - 주기적 리셋
+        T_0 = DEEPFM_CONFIG.get('COSINE_T0', 5)
+        eta_min_ratio = DEEPFM_CONFIG.get('COSINE_ETA_MIN_RATIO', 0.01)
+        scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            optimizer,
+            T_0=T_0,
+            eta_min=learning_rate * eta_min_ratio
+        )
+    else:
+        # ReduceLROnPlateau (fallback)
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=2, factor=0.7)
 
     best_val_score = 0
     patience_counter = 0
@@ -209,11 +235,16 @@ def train_fold(model, train_loader, val_loader, device, fold_num, max_epochs=25)
         metrics = calculate_competition_metrics(val_targets_array, val_predictions)
         comp_score = metrics['comp_score'] if isinstance(metrics, dict) else metrics
 
-        scheduler.step(train_loss)
+        # Scheduler step (스케줄러 타입에 따라 다르게 처리)
+        if scheduler_type in ['cosine', 'cosine_restart']:
+            scheduler.step()  # CosineAnnealing 계열은 매 epoch마다
+        else:
+            scheduler.step(train_loss)  # ReduceLROnPlateau는 loss 기반
 
         # 로깅 (첫 에포크, 최고 성능 에포크, 5 에포크마다)
+        current_lr = optimizer.param_groups[0]['lr']
         if epoch == 0 or comp_score > best_val_score or (epoch + 1) % 5 == 0:
-            print(f"     Epoch {epoch+1:2d}: Loss={train_loss:.4f}, CompScore={comp_score:.6f}")
+            print(f"     Epoch {epoch+1:2d}: Loss={train_loss:.4f}, CompScore={comp_score:.6f}, LR={current_lr:.6f}")
 
         # 조기 종료 체크
         if comp_score > best_val_score:
@@ -311,12 +342,7 @@ def train_deepfm_kfold(metadata, processor, data_dir):
 
         print(f"   Fold {fold+1} Competition Score: {fold_score:.6f}")
 
-        # WandB 로깅
-        wandb.log({
-            f'fold_{fold+1}_comp_score': fold_score,
-            f'fold_{fold+1}_samples': len(val_indices),
-            'completed_folds': fold + 1
-        })
+        # WandB 로깅 제거 - 최종 결과에서만 통합 로깅
 
         # 메모리 정리
         del train_loader, val_loader, model
@@ -349,13 +375,19 @@ def evaluate_kfold_results(full_targets, oof_predictions, fold_results):
     print(f"\n🎯 Out-of-Fold Metrics:")
     print(f"  OOF Competition Score: {oof_comp_score:.6f}")
 
-    # WandB 로깅
+    # WandB 로깅 - 통합된 결과만
     wandb.log({
         'cv_comp_score_mean': cv_mean,
         'cv_comp_score_std': cv_std,
         'oof_comp_score': oof_comp_score,
         'best_fold_score': max(fold_scores),
-        'worst_fold_score': min(fold_scores)
+        'worst_fold_score': min(fold_scores),
+        # 개별 fold 점수들을 한번에 (테이블 형태)
+        'fold_1_score': fold_scores[0] if len(fold_scores) > 0 else 0,
+        'fold_2_score': fold_scores[1] if len(fold_scores) > 1 else 0,
+        'fold_3_score': fold_scores[2] if len(fold_scores) > 2 else 0,
+        'fold_4_score': fold_scores[3] if len(fold_scores) > 3 else 0,
+        'fold_5_score': fold_scores[4] if len(fold_scores) > 4 else 0,
     })
 
     return {
