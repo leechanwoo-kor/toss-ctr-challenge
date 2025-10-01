@@ -20,10 +20,11 @@ class DeepFMProcessor:
     """독립적인 DeepFM 피처 프로세서"""
 
     def __init__(self):
-        self.categorical_features = ['gender', 'age_group', 'inventory_id', 'hour']
+        self.categorical_features = ['gender', 'age_group', 'inventory_id', 'hour', 'day_of_week']
         self.categorical_encoders = {}
         self.categorical_feature_dims = {}
         self.numerical_features = []
+        self.numerical_medians = {}  # 수치형 피처의 median 값 저장 (추론 시 사용)
         self.scaler = QuantileTransformer(
             output_distribution="uniform",
             n_quantiles=1000,
@@ -43,7 +44,11 @@ class DeepFMProcessor:
 
         df = df.copy()
 
-        # 1. 범주형 피처 인코딩
+        # 1. EDA 기반 피처 생성 먼저 (범주형 인코딩 전에)
+        print("🏪 Creating EDA features...")
+        df = self._create_eda_features(df, is_training=True)
+
+        # 2. 범주형 피처 인코딩 (EDA 피처 생성 후에)
         print("📊 Encoding categorical features...")
         for col in self.categorical_features:
             if col in df.columns:
@@ -59,10 +64,6 @@ class DeepFMProcessor:
                 self.categorical_feature_dims[col] = len(le.classes_)
 
                 print(f"   {col}: {self.categorical_feature_dims[col]} categories")
-
-        # 2. EDA 기반 피처 생성
-        print("🏪 Creating EDA features...")
-        df = self._create_eda_features(df, is_training=True)
 
         # 3. 시퀀스 피처 처리 - DISABLED (순수 DeepFM 테스트)
         if 'seq' in df.columns:
@@ -90,17 +91,20 @@ class DeepFMProcessor:
         # 6. 수치형 피처 스케일링
         print("⚖️ Scaling numerical features...")
         if self.numerical_features:
-            # 결측치 처리
+            # 결측치 처리 및 median 저장 (추론 시 사용)
             for col in self.numerical_features:
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col], errors='coerce')
-                    df[col] = df[col].fillna(df[col].median()).astype(np.float32)
+                    median_value = df[col].median()
+                    self.numerical_medians[col] = median_value  # median 저장!
+                    df[col] = df[col].fillna(median_value).astype(np.float32)
 
             # 스케일러 학습 및 적용
             df[self.numerical_features] = self.scaler.fit_transform(df[self.numerical_features])
             df[self.numerical_features] = df[self.numerical_features].astype(np.float32)
 
             print(f"   Scaled {len(self.numerical_features)} numerical features")
+            print(f"   Saved {len(self.numerical_medians)} median values for inference")
 
         print(f"✅ Processing complete!")
         print(f"   Categorical: {len(self.categorical_features)} features")
@@ -119,12 +123,7 @@ class DeepFMProcessor:
         print("   Creating EDA features...")
         df = self._create_eda_features(df, is_training=False)
 
-        # 2. 시퀀스 피처 처리 - DISABLED (순수 DeepFM 테스트)
-        if 'seq' in df.columns:
-            print("   Removing sequence column (pure DeepFM test)...")
-            df = df.drop('seq', axis=1)
-
-        # 3. 범주형 피처 인코딩 (학습된 인코더 사용)
+        # 2. 범주형 피처 인코딩 (학습된 인코더 사용)
         print("   Encoding categorical features...")
         for col in self.categorical_features:
             if col in df.columns:
@@ -140,6 +139,11 @@ class DeepFMProcessor:
 
                 df[col] = self.categorical_encoders[col].transform(df[col])
 
+        # 3. 시퀀스 피처 처리 - DISABLED (순수 DeepFM 테스트)
+        if 'seq' in df.columns:
+            print("   Removing sequence column (pure DeepFM test)...")
+            df = df.drop('seq', axis=1)
+
         # 4. 불필요한 피처 제거 (훈련 시와 동일)
         df = self._remove_problematic_features(df)
 
@@ -147,16 +151,18 @@ class DeepFMProcessor:
         print("   Scaling numerical features...")
         numerical_cols = [col for col in self.numerical_features if col in df.columns]
         if numerical_cols:
-            # 결측치 처리
+            # 결측치 처리 - 훈련 시 학습한 median 사용 (CRITICAL FIX!)
             for col in numerical_cols:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
-                df[col] = df[col].fillna(0).astype(np.float32)  # 추론 시에는 0으로 채움
+                # 학습된 median 사용 (없으면 0으로 fallback)
+                median_value = self.numerical_medians.get(col, 0)
+                df[col] = df[col].fillna(median_value).astype(np.float32)
 
             # 스케일러 적용
             df[numerical_cols] = self.scaler.transform(df[numerical_cols])
             df[numerical_cols] = df[numerical_cols].astype(np.float32)
 
-            print(f"   Applied scaler to {len(numerical_cols)} features")
+            print(f"   Applied scaler to {len(numerical_cols)} features (using learned medians)")
 
         print(f"✅ Transform complete: {df.shape}")
         return df
@@ -168,6 +174,22 @@ class DeepFMProcessor:
         has_age_group = 'age_group' in df.columns
         has_inventory = 'inventory_id' in df.columns
         has_clicked = 'clicked' in df.columns
+
+        # 0. 희귀 카테고리 통합 (과적합 방지)
+        if has_inventory:
+            if is_training:
+                # 훈련 시: 희귀 카테고리 식별 및 저장
+                rare_threshold = len(df) * 0.001  # 0.1% 미만
+                value_counts = df['inventory_id'].value_counts()
+                self.rare_inventory_values = value_counts[value_counts < rare_threshold].index.tolist()
+
+                if len(self.rare_inventory_values) > 0:
+                    print(f"   Found {len(self.rare_inventory_values)} rare inventory categories (< 0.1%)")
+                    df.loc[df['inventory_id'].isin(self.rare_inventory_values), 'inventory_id'] = 'RARE'
+            else:
+                # 추론 시: 훈련에서 식별된 희귀 카테고리 통합
+                if hasattr(self, 'rare_inventory_values') and len(self.rare_inventory_values) > 0:
+                    df.loc[df['inventory_id'].isin(self.rare_inventory_values), 'inventory_id'] = 'RARE'
 
         # 1. Inventory popularity & frequency features
         if has_inventory:
@@ -215,29 +237,51 @@ class DeepFMProcessor:
                 self.gender_inventory_affinity
             ).fillna(len(df['inventory_id'].unique()) // 2).astype(np.float32)
 
-        # 5. NEW: Time cyclical encoding features
+        # 5. Time cyclical encoding features (hour)
         if 'hour' in df.columns:
             # Ensure hour is numeric and handle any data type issues
-            df['hour'] = pd.to_numeric(df['hour'], errors='coerce').fillna(12).astype(int)
-            df['hour'] = df['hour'].clip(0, 23)  # Ensure valid hour range
+            hour_values = pd.to_numeric(df['hour'], errors='coerce').fillna(12)
+            hour_values = hour_values.clip(0, 23)  # Ensure valid hour range
 
             # Create cyclical features using numeric values
-            hour_numeric = df['hour'].astype(float)
-            df['hour_sin'] = np.sin(2 * np.pi * hour_numeric / 24).astype(np.float32)
-            df['hour_cos'] = np.cos(2 * np.pi * hour_numeric / 24).astype(np.float32)
+            df['hour_sin'] = np.sin(2 * np.pi * hour_values / 24).astype(np.float32)
+            df['hour_cos'] = np.cos(2 * np.pi * hour_values / 24).astype(np.float32)
 
-            # Convert back to string format for categorical encoding consistency
-            df['hour'] = df['hour'].astype(str).str.zfill(2)  # 0 -> '00', 1 -> '01'
+            # Keep hour as string for categorical encoding (will be converted to int later)
+            df['hour'] = hour_values.astype(int).astype(str).str.zfill(2)  # 0 -> '00', 1 -> '01'
+
+        # 6. Day of week cyclical encoding
+        if 'day_of_week' in df.columns:
+            # Ensure day_of_week is numeric (0-6)
+            day_values = pd.to_numeric(df['day_of_week'], errors='coerce').fillna(3)  # Default to Wednesday
+            day_values = day_values.clip(0, 6)  # Ensure valid day range
+
+            # Create cyclical features
+            df['day_sin'] = np.sin(2 * np.pi * day_values / 7).astype(np.float32)
+            df['day_cos'] = np.cos(2 * np.pi * day_values / 7).astype(np.float32)
+
+            # Keep day_of_week as string for categorical encoding
+            df['day_of_week'] = day_values.astype(int).astype(str)  # 0 -> '0', 1 -> '1', etc.
+
+        # 7. 결측치 인디케이터 피처 (High Impact - CTR 45.5% 상승!)
+        # feat_a 계열: 18개 피처가 항상 함께 결측됨 → 하나의 통합 인디케이터
+        if 'feat_a_1' in df.columns:
+            df['feat_a_is_missing'] = df['feat_a_1'].isna().astype(np.float32)
+            # 결측치 시 CTR: 0.0277 vs 비결측치 CTR: 0.0191 (45% 차이)
+
+        # gender + age_group: 항상 함께 결측됨 (17,208개) → 하나의 통합 인디케이터
+        if 'gender' in df.columns:
+            df['user_info_missing'] = df['gender'].isna().astype(np.float32)
+            # 결측치 시 CTR: 0.0236 vs 비결측치 CTR: 0.0191 (24% 차이)
 
         return df
 
     def _remove_problematic_features(self, df):
-        """문제가 되는 피처들 제거 (SimplifiedDeepFMProcessor와 동일)"""
+        """문제가 되는 피처들 제거"""
         features_to_remove = [
             'l_feat_20', 'l_feat_23',  # 상수 피처
             'l_feat_16', 'l_feat_17',  # 중복 피처
             'l_feat_24',               # 통계적 무의미
-            'day_of_week'              # 낮은 중요도
         ]
 
         existing_features = [f for f in features_to_remove if f in df.columns]
@@ -251,12 +295,12 @@ class DeepFMProcessor:
         """프로세서 저장"""
         with open(filepath, 'wb') as f:
             pickle.dump(self, f)
-        print(f"✅ Processor saved to {filepath}")
+        print(f"[OK] Processor saved to {filepath}")
 
     @classmethod
     def load(cls, filepath):
         """프로세서 로드"""
         with open(filepath, 'rb') as f:
             processor = pickle.load(f)
-        print(f"✅ Processor loaded from {filepath}")
+        print(f"[OK] Processor loaded from {filepath}")
         return processor

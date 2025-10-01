@@ -375,20 +375,18 @@ def evaluate_kfold_results(full_targets, oof_predictions, fold_results):
     print(f"\n🎯 Out-of-Fold Metrics:")
     print(f"  OOF Competition Score: {oof_comp_score:.6f}")
 
-    # WandB 로깅 - 통합된 결과만
+    # WandB 로깅 - 핵심 메트릭만 (개별 fold 차트 제거)
     wandb.log({
         'cv_comp_score_mean': cv_mean,
         'cv_comp_score_std': cv_std,
         'oof_comp_score': oof_comp_score,
         'best_fold_score': max(fold_scores),
         'worst_fold_score': min(fold_scores),
-        # 개별 fold 점수들을 한번에 (테이블 형태)
-        'fold_1_score': fold_scores[0] if len(fold_scores) > 0 else 0,
-        'fold_2_score': fold_scores[1] if len(fold_scores) > 1 else 0,
-        'fold_3_score': fold_scores[2] if len(fold_scores) > 2 else 0,
-        'fold_4_score': fold_scores[3] if len(fold_scores) > 3 else 0,
-        'fold_5_score': fold_scores[4] if len(fold_scores) > 4 else 0,
     })
+
+    # 개별 fold 점수는 summary에만 기록 (차트 생성 안 됨)
+    for i, score in enumerate(fold_scores, 1):
+        wandb.run.summary[f'fold_{i}_score'] = score
 
     return {
         'cv_mean': cv_mean,

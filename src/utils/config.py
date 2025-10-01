@@ -17,11 +17,11 @@ DEEPFM_CONFIG = {
     "SAMPLE_SIZE": None,  # 전체 데이터 사용 (10.7M)
     "BATCH_SIZE": 1024,  # 현업 표준 (더 큰 배치)
     "EPOCHS": 30,  # 충분한 학습을 위해 증가 (15→30)
-    "LEARNING_RATE": 0.001,  # 원래대로 복원 (0.003→0.001)
-    "EMBEDDING_DIM": 16,  # 최적화: 가벼운 임베딩 (32→16)
-    "HIDDEN_DIMS": [256, 128],  # 최적화: 가벼운 네트워크 ([1024,512,256]→[256,128])
-    "DROPOUT": 0.2,  # 현업 표준 (낮은 드롭아웃)
-    "WEIGHT_DECAY": 1e-5,  # 현업 표준
+    "LEARNING_RATE": 0.001,  # 검증된 설정으로 복원 (0.002→0.001) - 0.351135 달성 설정
+    "EMBEDDING_DIM": 16,  # 검증된 설정으로 복원 (20→16)
+    "HIDDEN_DIMS": [256, 128],  # 검증된 설정으로 복원 ([512,256,128]→[256,128])
+    "DROPOUT": 0.25,  # Phase 2: 정규화 강화 (0.2→0.25) - 과적합 방지
+    "WEIGHT_DECAY": 2e-5,  # Phase 2: 정규화 강화 (1e-5→2e-5) - L2 패널티 2배
     "POS_WEIGHT": 51.6,  # 원래대로 복원 (5.0→51.6)
     "FOCAL_ALPHA": 0.25,  # Focal Loss alpha parameter
     "FOCAL_GAMMA": 2.0,  # Focal Loss gamma parameter
@@ -78,26 +78,27 @@ LIGHTGBM_WANDB_CONFIG = {
     "NOTES": "LightGBM with industry standard hyperparams for CTR prediction",
 }
 
-# XGBoost Optuna 최적화 설정 (0.355769 달성 - 9/28 Trial 64)
+# XGBoost 검증된 최적 설정 (from xgboost_best_params_20250929.json)
+# CV: 0.354923, Validation: 0.355868, Public LB: 0.348568
 XGBOOST_CONFIG = {
     "objective": "binary:logistic",
     "eval_metric": "logloss",
     "booster": "gbtree",
-    "device": "cuda:0",                  # GPU 가속
-    "tree_method": "hist",               # 히스토그램 방식
-    "max_depth": 9,                      # Trial 64 최적값
-    "learning_rate": 0.05008826604937745, # Trial 64 최적값
-    "n_estimators": 375,                 # Trial 64 최적값
-    "min_child_weight": 191,             # Trial 64 최적값
-    "reg_alpha": 0.3901451531725555,     # Trial 64 최적값 (L1 정규화)
-    "reg_lambda": 0.26805338049519767,   # Trial 64 최적값 (L2 정규화)
-    "subsample": 0.9999176593328056,     # Trial 64 최적값
-    "colsample_bytree": 0.8338866788535406, # Trial 64 최적값
-    "colsample_bylevel": 0.8048444047762913, # Trial 64 최적값
-    "colsample_bynode": 0.8602187704339929,  # Trial 64 최적값
-    "gamma": 4.578347337117214,          # Trial 64 최적값
-    "max_delta_step": 5,                 # Trial 64 최적값
-    "scale_pos_weight": 51.6,            # 클래스 불균형 (98.1/1.9)
+    "device": "cuda:0",
+    "tree_method": "hist",
+    "max_depth": 9,
+    "learning_rate": 0.04175612007277342,
+    "n_estimators": 400,
+    "min_child_weight": 195,
+    "reg_alpha": 0.2002740001146326,
+    "reg_lambda": 0.15010513818084412,
+    "subsample": 0.9762245610286578,
+    "colsample_bytree": 0.8176096363827465,
+    "colsample_bylevel": 0.77295375493092,
+    "colsample_bynode": 0.8455520173555662,
+    "gamma": 4.65560411412394,
+    "max_delta_step": 5,
+    "scale_pos_weight": 51.6,
     "random_state": 42,
     "n_jobs": -1,
     "verbosity": 0,

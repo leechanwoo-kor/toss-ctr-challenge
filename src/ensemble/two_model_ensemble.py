@@ -10,7 +10,7 @@ def main():
 
     # 파일 경로
     xgboost_file = "submissions/xgboost/xgboost_kfold_0929_2306.csv"
-    deepfm_file = "submissions/deepfm/deepfm_kfold_ensemble_20250929_230730.csv"
+    deepfm_file = "submissions/deepfm/deepfm_kfold_ensemble_20251001_134442.csv"  # Phase 2 improved model
 
     # 데이터 로드
     print("Loading predictions...")
@@ -44,11 +44,12 @@ def main():
         result_df = xgb_df[['ID']].copy()
         result_df['clicked'] = ensemble_preds
 
-        # 예상 점수 계산 (XGBoost 0.354678 CV 기준)
-        expected_score = xgb_weight * 0.349 + deepfm_weight * 0.342  # 대략적 추정
+        # 예상 점수 계산 (실제 Public LB 기준)
+        # XGBoost Public: 0.348568, DeepFM Public: 0.346570
+        expected_score = xgb_weight * 0.3486 + deepfm_weight * 0.3466
 
         filename = f"ensemble_xgb_deepfm_{name}_{timestamp}.csv"
-        result_df.to_csv(f"submissions/{filename}", index=False)
+        result_df.to_csv(f"submissions/ensemble/{filename}", index=False)
 
         print(f"{name}: Expected {expected_score:.4f}, XGB {xgb_weight:.2f} + DeepFM {deepfm_weight:.2f}")
         print(f"  Saved: {filename}")

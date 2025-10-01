@@ -1,0 +1,36 @@
+{
+  "optimization_info": {
+    "date": "2025-09-29",
+    "time": "10:21",
+    "total_trials": 57,
+    "best_trial": 30,
+    "cv_score": 0.354923,
+    "validation_score": 0.355868,
+    "validation_auc": 0.745824,
+    "target_achieved": true,
+    "target_score": 0.35
+  },
+  "best_parameters": {
+    "max_depth": 9,
+    "learning_rate": 0.04175612007277342,
+    "n_estimators": 400,
+    "min_child_weight": 195,
+    "reg_alpha": 0.2002740001146326,
+    "reg_lambda": 0.15010513818084412,
+    "subsample": 0.9762245610286578,
+    "colsample_bytree": 0.8176096363827465,
+    "colsample_bylevel": 0.77295375493092,
+    "colsample_bynode": 0.8455520173555662,
+    "gamma": 4.65560411412394,
+    "max_delta_step": 5,
+    "objective": "binary:logistic",
+    "eval_metric": "logloss",
+    "booster": "gbtree",
+    "device": "cuda:0",
+    "tree_method": "hist",
+    "scale_pos_weight": 51.6,
+    "random_state": 42,
+    "n_jobs": -1,
+    "verbosity": 0
+  }
+}

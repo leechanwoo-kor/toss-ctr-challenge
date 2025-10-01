@@ -120,21 +120,19 @@ class XGBoostFeatureProcessor:
                 else:
                     df[col] = le.transform(df[col])
 
-        # 수치형 피처 처리 (훈련/테스트 일관성 보장)
+        # 수치형 피처 처리 - median 대체 (v1 최고 성능 방식)
         numerical_cols = [col for col in self.numerical_features if col in df.columns]
         if numerical_cols:
-            if is_training:
-                # 수치형 변환 시도
-                for col in numerical_cols:
-                    df[col] = pd.to_numeric(df[col], errors='coerce')
+            # 수치형 변환
+            for col in numerical_cols:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
 
+            if is_training:
                 # 훈련 시: median 계산하고 저장
                 self.numerical_medians = df[numerical_cols].median().to_dict()
                 df[numerical_cols] = df[numerical_cols].fillna(self.numerical_medians).astype(np.float32)
             else:
-                # 테스트 시: 수치형 변환 후 저장된 훈련 median 사용
-                for col in numerical_cols:
-                    df[col] = pd.to_numeric(df[col], errors='coerce')
+                # 테스트 시: 저장된 훈련 median 사용
                 df[numerical_cols] = df[numerical_cols].fillna(self.numerical_medians).astype(np.float32)
 
         return df
