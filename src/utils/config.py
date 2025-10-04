@@ -12,24 +12,24 @@
 기본 프로젝트 설정은 src/config.py 참조
 """
 
-# DeepFM 현업 표준 설정 (Google/Meta/ByteDance 기준)
+# DeepFM 검증된 최적 설정 + 확장 학습 (OOF: 0.351135 → Target: 0.352+)
 DEEPFM_CONFIG = {
     "SAMPLE_SIZE": None,  # 전체 데이터 사용 (10.7M)
     "BATCH_SIZE": 1024,  # 현업 표준 (더 큰 배치)
-    "EPOCHS": 30,  # 충분한 학습을 위해 증가 (15→30)
-    "LEARNING_RATE": 0.001,  # 검증된 설정으로 복원 (0.002→0.001) - 0.351135 달성 설정
-    "EMBEDDING_DIM": 16,  # 검증된 설정으로 복원 (20→16)
-    "HIDDEN_DIMS": [256, 128],  # 검증된 설정으로 복원 ([512,256,128]→[256,128])
-    "DROPOUT": 0.25,  # Phase 2: 정규화 강화 (0.2→0.25) - 과적합 방지
-    "WEIGHT_DECAY": 2e-5,  # Phase 2: 정규화 강화 (1e-5→2e-5) - L2 패널티 2배
-    "POS_WEIGHT": 51.6,  # 원래대로 복원 (5.0→51.6)
+    "EPOCHS": 40,  # 확장 학습 (30→40) - 더 깊은 수렴
+    "LEARNING_RATE": 0.001,  # 검증된 설정 - 0.351135 달성
+    "EMBEDDING_DIM": 16,  # 검증된 설정 (16이 최적)
+    "HIDDEN_DIMS": [256, 128],  # 검증된 설정
+    "DROPOUT": 0.25,  # 정규화 강화 - 과적합 방지
+    "WEIGHT_DECAY": 2e-5,  # L2 패널티
+    "POS_WEIGHT": 51.6,  # 클래스 불균형 처리
     "FOCAL_ALPHA": 0.25,  # Focal Loss alpha parameter
     "FOCAL_GAMMA": 2.0,  # Focal Loss gamma parameter
     "SEED": 42,
-    "EARLY_STOPPING": 5,
+    "EARLY_STOPPING": 7,  # 더 관대한 조기 종료 (5→7) - 후반부 미세 개선 허용
     # Learning Rate Scheduler 설정
     "SCHEDULER_TYPE": "cosine",  # cosine (안정적), cosine_restart (주기적 리셋), plateau
-    "COSINE_T_MAX": 30,  # CosineAnnealingLR T_max (전체 에포크 수)
+    "COSINE_T_MAX": 40,  # CosineAnnealingLR T_max (전체 에포크 수와 동일)
     "COSINE_T0": 5,  # CosineAnnealingWarmRestarts T_0 (restart 주기, cosine_restart 사용시)
     "COSINE_ETA_MIN_RATIO": 0.01,  # 최소 LR = LR * ratio
     # WandB 로깅 설정
