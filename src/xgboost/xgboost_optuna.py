@@ -28,9 +28,9 @@ from src.utils.config import XGBOOST_CONFIG, XGBOOST_WANDB_CONFIG, KFOLD_CONFIG
 DATA_DIR = "data/processed/xgboost"
 CHECKPOINT_DIR = "checkpoints/xgboost"
 OPTUNA_STUDIES_DIR = "optuna_studies"
-TARGET_SCORE = 0.35
-N_TRIALS = 150  # Fine-tuning focused search
-TIMEOUT_HOURS = 10   # 집중적 정밀 탐색
+TARGET_SCORE = 0.350  # v3 목표: Public LB 0.350+ (현재 0.3486)
+N_TRIALS = 200  # v3 확장 탐색: 더 많은 trials로 breakthrough 찾기
+TIMEOUT_HOURS = 12  # 12시간 집중 탐색 (충분한 탐색 시간)
 
 
 def load_prepared_data():
@@ -78,8 +78,10 @@ def objective(trial):
 
     print(f"\nTrial {trial.number} starting...")
 
-    # 🎯 최적 파라미터 (0.355868) 기준 Fine-tuning Round 2
-    # Trial 30의 최적값 주변에서 더욱 정밀한 탐색
+    # 🎯 v4 Anti-Overfitting 전략 (Validation-LB 간극 최소화)
+    # Problem: v3는 Val 0.356인데 LB 0.348 (gap -0.008) - 과적합!
+    # Strategy: 학습량 대폭 감소 + 정규화 강화 → LB 성능 개선
+    # Goal: Val-LB 간극을 -0.002 이내로 줄여서 LB 0.350+ 달성
     params = {
         "objective": "binary:logistic",
         "eval_metric": "logloss",
@@ -87,28 +89,28 @@ def objective(trial):
         "device": "cuda:0",
         "tree_method": "hist",
 
-        # Core hyperparameters - 최적값 주변 ±10% 범위
-        "max_depth": trial.suggest_int("max_depth", 8, 10),  # 9 ±1
-        "learning_rate": trial.suggest_float("learning_rate", 0.035, 0.050, log=False),  # 0.04176 ±20%
-        "n_estimators": trial.suggest_int("n_estimators", 375, 425, step=25),  # 400 ±25
+        # Core hyperparameters - 과적합 방지
+        "max_depth": trial.suggest_int("max_depth", 7, 9),  # 11 → 9 (깊은 트리 제한)
+        "learning_rate": trial.suggest_float("learning_rate", 0.020, 0.040, log=False),  # 낮은 범위로 이동
+        "n_estimators": trial.suggest_int("n_estimators", 150, 280, step=10),  # 550 → 280 (절반 이하!)
 
-        # Regularization - 정밀 범위 조정
-        "min_child_weight": trial.suggest_int("min_child_weight", 175, 215),  # 195 ±20
-        "reg_alpha": trial.suggest_float("reg_alpha", 0.15, 0.25),  # 0.200 ±25%
-        "reg_lambda": trial.suggest_float("reg_lambda", 0.12, 0.18),  # 0.150 ±20%
+        # Regularization - 강화된 탐색 (과적합 방지 핵심)
+        "min_child_weight": trial.suggest_int("min_child_weight", 200, 280),  # 더 보수적으로
+        "reg_alpha": trial.suggest_float("reg_alpha", 0.25, 0.55),  # L1 강화 (0.35 → 0.55)
+        "reg_lambda": trial.suggest_float("reg_lambda", 0.18, 0.40),  # L2 강화 (0.25 → 0.40)
 
-        # Sampling parameters - 미세 조정 (±5% 범위)
-        "subsample": trial.suggest_float("subsample", 0.93, 1.0),  # 0.976 ±3%
-        "colsample_bytree": trial.suggest_float("colsample_bytree", 0.78, 0.86),  # 0.818 ±5%
-        "colsample_bylevel": trial.suggest_float("colsample_bylevel", 0.73, 0.81),  # 0.773 ±5%
-        "colsample_bynode": trial.suggest_float("colsample_bynode", 0.80, 0.89),  # 0.846 ±5%
+        # Sampling parameters - 다양성 증가 (과적합 방지)
+        "subsample": trial.suggest_float("subsample", 0.88, 0.96),  # 약간 낮춤 (더 강한 배깅)
+        "colsample_bytree": trial.suggest_float("colsample_bytree", 0.65, 0.80),  # 낮춤 (피처 다양성)
+        "colsample_bylevel": trial.suggest_float("colsample_bylevel", 0.65, 0.80),  # 낮춤
+        "colsample_bynode": trial.suggest_float("colsample_bynode", 0.70, 0.85),  # 낮춤
 
-        # Advanced parameters - 좁은 범위 정밀 탐색
-        "gamma": trial.suggest_float("gamma", 4.0, 5.5),  # 4.656 ±15%
-        "max_delta_step": trial.suggest_int("max_delta_step", 4, 6),  # 5 ±1
+        # Advanced parameters - 보수적 탐색
+        "gamma": trial.suggest_float("gamma", 5.0, 8.0),  # 강화 (6.5 → 8.0)
+        "max_delta_step": trial.suggest_int("max_delta_step", 3, 5),  # 안정적 범위
 
         # Fixed parameters
-        "scale_pos_weight": 51.6,  # 클래스 불균형 보정
+        "scale_pos_weight": 51.6,
         "random_state": 42,
         "n_jobs": -1,
         "verbosity": 0,
@@ -147,7 +149,7 @@ def objective(trial):
                 dtrain,
                 num_boost_round=params["n_estimators"],
                 evals=[(dtrain, "train"), (dvalid, "valid")],
-                early_stopping_rounds=50,  # 더 관대한 early stopping
+                early_stopping_rounds=20,  # v4: 엄격한 early stopping (50 → 20)
                 verbose_eval=False,
                 callbacks=[pruning_callback],
             )
@@ -239,15 +241,15 @@ def main():
     storage = f"sqlite:///{OPTUNA_STUDIES_DIR}/{study_name}.db"
     os.makedirs(OPTUNA_STUDIES_DIR, exist_ok=True)
 
-    # 더 aggressive한 pruning으로 효율성 향상
+    # Fine-tuning에 최적화된 pruning 설정
     study = optuna.create_study(
         study_name=study_name,
         storage=storage,
         direction="maximize",  # Competition score 최대화
         pruner=optuna.pruners.MedianPruner(
-            n_startup_trials=10,    # 더 많은 startup trials
-            n_warmup_steps=50,      # 더 빠른 warmup
-            interval_steps=10       # 더 자주 pruning 체크
+            n_startup_trials=15,    # v2 근처 탐색이므로 더 많은 startup (10→15)
+            n_warmup_steps=30,      # Fine-tuning이므로 더 빠른 수렴 가능
+            interval_steps=15       # 적당한 pruning 빈도
         ),
         load_if_exists=True,
     )
@@ -257,8 +259,9 @@ def main():
     print(f"K-Fold: {KFOLD_CONFIG['n_splits']}-fold Cross Validation")
 
     # 최적화 실행
-    print(f"Starting fine-tuning optimization with {N_TRIALS} trials...")
-    print(f"Strategy: Fine-tuning around best parameters (0.355868 baseline)")
+    print(f"Starting v2 fine-tuning optimization with {N_TRIALS} trials...")
+    print(f"Strategy: ±10~20% exploration around v2 (Public LB 0.3486)")
+    print(f"Key changes: reg_alpha 0.15~0.28, reg_lambda 0.12~0.20, subsample 0.94~0.99")
     print(f"Timeout: {TIMEOUT_HOURS} hours")
 
     try:

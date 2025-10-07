@@ -78,8 +78,9 @@ LIGHTGBM_WANDB_CONFIG = {
     "NOTES": "LightGBM with industry standard hyperparams for CTR prediction",
 }
 
-# XGBoost 검증된 최적 설정 (from xgboost_best_params_20250929.json)
-# CV: 0.354923, Validation: 0.355868, Public LB: 0.348568
+# XGBoost v4 최적 설정 (Optuna Anti-Overfitting - 20251007)
+# CV: 0.355010, Validation: 0.355523, Public LB: 0.348995 ✅ (BEST!)
+# Strategy: 학습량 감소 + 정규화 강화로 Validation-LB 간극 최소화 (-0.0065)
 XGBOOST_CONFIG = {
     "objective": "binary:logistic",
     "eval_metric": "logloss",
@@ -87,22 +88,22 @@ XGBOOST_CONFIG = {
     "device": "cuda:0",
     "tree_method": "hist",
     "max_depth": 9,
-    "learning_rate": 0.04175612007277342,
-    "n_estimators": 400,
-    "min_child_weight": 195,
-    "reg_alpha": 0.2002740001146326,
-    "reg_lambda": 0.15010513818084412,
-    "subsample": 0.9762245610286578,
-    "colsample_bytree": 0.8176096363827465,
-    "colsample_bylevel": 0.77295375493092,
-    "colsample_bynode": 0.8455520173555662,
-    "gamma": 4.65560411412394,
-    "max_delta_step": 5,
+    "learning_rate": 0.03917586621687341,
+    "n_estimators": 280,                    # 400 → 280 (30% 감소, 과적합 방지)
+    "min_child_weight": 248,                # 195 → 248 (더 보수적)
+    "reg_alpha": 0.27450205788134485,       # L1 정규화 강화
+    "reg_lambda": 0.2844933895906582,       # L2 정규화 대폭 강화 (+89%)
+    "subsample": 0.8800090828918387,        # 0.976 → 0.880 (더 강한 배깅)
+    "colsample_bytree": 0.7222136942580359, # 피처 샘플링
+    "colsample_bylevel": 0.7408740593918586,
+    "colsample_bynode": 0.7522542036638713,
+    "gamma": 6.806264992795538,             # 4.66 → 6.81 (강화)
+    "max_delta_step": 3,                    # 5 → 3 (안정성)
     "scale_pos_weight": 51.6,
     "random_state": 42,
     "n_jobs": -1,
     "verbosity": 0,
-    "early_stopping_rounds": 30,
+    "early_stopping_rounds": 20,            # 30 → 20 (더 엄격)
 }
 
 # CatBoost 과적합 방지 설정 (2025/09/25 v2 - Anti-Overfitting)

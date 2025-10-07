@@ -9,7 +9,7 @@ def main():
     print("=== XGBoost + DeepFM K-Fold 2-Model Ensemble ===")
 
     # 파일 경로
-    xgboost_file = "submissions/xgboost/xgboost_kfold_0929_2306.csv"
+    xgboost_file = "submissions/xgboost/xgboost_kfold_1007_2346.csv"
     deepfm_file = "submissions/deepfm/deepfm_kfold_ensemble_20251005_004836.csv"  # v2
 
     # 데이터 로드
