@@ -16,11 +16,12 @@ import glob
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from src.models.deepfm_optimized import OptimizedDeepFM
+from src.models.deepfm_dynamic_embedding import DynamicEmbeddingDeepFM
 from src.deepfm.deepfm_processor import DeepFMProcessor
 
 
 def find_latest_kfold_experiment():
-    """최신 K-Fold 실험 폴더 자동 탐색"""
+    """최신 K-Fold 실험 폴더 자동 탐색 (수정 시간 기준)"""
     base_dir = "checkpoints/deepfm_kfold"
     if not os.path.exists(base_dir):
         raise FileNotFoundError(f"K-Fold checkpoint directory not found: {base_dir}")
@@ -30,8 +31,10 @@ def find_latest_kfold_experiment():
     if not experiments:
         raise FileNotFoundError(f"No K-Fold experiment folders found in {base_dir}")
 
-    # 폴더명으로 정렬하여 최신 선택
-    latest_exp = sorted(experiments)[-1]
+    # 수정 시간 기준으로 정렬하여 최신 선택
+    exp_paths = [(d, os.path.getmtime(os.path.join(base_dir, d))) for d in experiments]
+    exp_paths.sort(key=lambda x: x[1], reverse=True)  # 최신 것이 먼저
+    latest_exp = exp_paths[0][0]
     exp_path = os.path.join(base_dir, latest_exp)
 
     print(f"🎯 Found latest K-Fold experiment: {latest_exp}")
@@ -62,14 +65,33 @@ def load_kfold_models(exp_path):
         metadata = checkpoint['metadata']
         config = checkpoint.get('config', {})
 
-        # 모델 초기화
-        model = OptimizedDeepFM(
-            feature_dims=processor.categorical_feature_dims,
-            default_embedding_dim=config.get('EMBEDDING_DIM', 16),
-            hidden_units=config.get('HIDDEN_DIMS', [256, 128]),
-            dropout=config.get('DROPOUT', 0.2),
-            num_numerical=len(processor.numerical_features)
-        )
+        # Dynamic Embedding 모델인지 확인
+        use_dynamic = config.get('USE_DYNAMIC_EMBEDDING', False)
+
+        if use_dynamic:
+            # Dynamic Embedding 모델 초기화
+            model = DynamicEmbeddingDeepFM(
+                feature_dims=processor.categorical_feature_dims,
+                hidden_units=config.get('HIDDEN_DIMS', [256, 128]),
+                dropout=config.get('DROPOUT', 0.25),
+                num_numerical=len(processor.numerical_features),
+                min_embed_dim=config.get('MIN_EMBED_DIM', 4),
+                max_embed_dim=config.get('MAX_EMBED_DIM', 50),
+                use_dynamic_embedding=True
+            )
+            if fold == 1:
+                print(f"   📊 Using DynamicEmbeddingDeepFM")
+        else:
+            # OptimizedDeepFM 모델 초기화
+            model = OptimizedDeepFM(
+                feature_dims=processor.categorical_feature_dims,
+                default_embedding_dim=config.get('EMBEDDING_DIM', 16),
+                hidden_units=config.get('HIDDEN_DIMS', [256, 128]),
+                dropout=config.get('DROPOUT', 0.2),
+                num_numerical=len(processor.numerical_features)
+            )
+            if fold == 1:
+                print(f"   📊 Using OptimizedDeepFM")
 
         model.load_state_dict(checkpoint['model_state_dict'])
         model.eval()

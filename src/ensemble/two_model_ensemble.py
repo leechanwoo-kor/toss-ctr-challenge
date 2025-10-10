@@ -10,7 +10,7 @@ def main():
 
     # 파일 경로
     xgboost_file = "submissions/xgboost/xgboost_kfold_1007_2346.csv" # v4
-    deepfm_file = "submissions/deepfm/deepfm_kfold_ensemble_20251005_004836.csv"  # v2.2
+    deepfm_file = "submissions/deepfm/deepfm_kfold_ensemble_20251011_000856.csv"  # v2.2 embedding
 
     # 데이터 로드
     print("Loading predictions...")

@@ -21,9 +21,14 @@ from sklearn.model_selection import StratifiedKFold
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from src.models.deepfm_optimized import OptimizedDeepFM
+from src.models.deepfm_dynamic_embedding import DynamicEmbeddingDeepFM
 from src.deepfm.deepfm_processor import DeepFMProcessor
-from src.utils.config import DEEPFM_CONFIG, WANDB_CONFIG, KFOLD_CONFIG
+from src.utils.config import DEEPFM_CONFIG, DEEPFM_DYNAMIC_CONFIG, WANDB_CONFIG, KFOLD_CONFIG
 from src.utils.metrics import calculate_competition_metrics
+
+# 🎯 Dynamic Embedding 사용 여부 설정
+USE_DYNAMIC_EMBEDDING = True  # True: Dynamic Embedding, False: v2.2 Original
+CONFIG = DEEPFM_DYNAMIC_CONFIG if USE_DYNAMIC_EMBEDDING else DEEPFM_CONFIG
 
 
 def seed_everything(seed):
@@ -134,24 +139,24 @@ def train_fold(model, train_loader, val_loader, device, fold_num, max_epochs=Non
     print(f"   Training fold {fold_num}...")
 
     if max_epochs is None:
-        max_epochs = DEEPFM_CONFIG.get('EPOCHS', 30)
+        max_epochs = CONFIG.get('EPOCHS', 30)
 
     # 하이퍼파라미터
-    learning_rate = DEEPFM_CONFIG.get('LEARNING_RATE', 0.001)
-    weight_decay = DEEPFM_CONFIG.get('WEIGHT_DECAY', 1e-5)
-    pos_weight = DEEPFM_CONFIG.get('POS_WEIGHT', 51.6)
-    early_stopping_patience = DEEPFM_CONFIG.get('EARLY_STOPPING', 5)
+    learning_rate = CONFIG.get('LEARNING_RATE', 0.001)
+    weight_decay = CONFIG.get('WEIGHT_DECAY', 1e-5)
+    pos_weight = CONFIG.get('POS_WEIGHT', 51.6)
+    early_stopping_patience = CONFIG.get('EARLY_STOPPING', 5)
 
     pos_weight_tensor = torch.tensor([pos_weight]).to(device)
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight_tensor)
     optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
 
     # Scheduler 설정 (config 기반)
-    scheduler_type = DEEPFM_CONFIG.get('SCHEDULER_TYPE', 'cosine')
+    scheduler_type = CONFIG.get('SCHEDULER_TYPE', 'cosine')
     if scheduler_type == 'cosine':
         # CosineAnnealingLR - 안정적인 단일 코사인 감소
-        T_max = DEEPFM_CONFIG.get('COSINE_T_MAX', max_epochs)
-        eta_min_ratio = DEEPFM_CONFIG.get('COSINE_ETA_MIN_RATIO', 0.01)
+        T_max = CONFIG.get('COSINE_T_MAX', max_epochs)
+        eta_min_ratio = CONFIG.get('COSINE_ETA_MIN_RATIO', 0.01)
         scheduler = optim.lr_scheduler.CosineAnnealingLR(
             optimizer,
             T_max=T_max,
@@ -159,8 +164,8 @@ def train_fold(model, train_loader, val_loader, device, fold_num, max_epochs=Non
         )
     elif scheduler_type == 'cosine_restart':
         # CosineAnnealingWarmRestarts - 주기적 리셋
-        T_0 = DEEPFM_CONFIG.get('COSINE_T0', 5)
-        eta_min_ratio = DEEPFM_CONFIG.get('COSINE_ETA_MIN_RATIO', 0.01)
+        T_0 = CONFIG.get('COSINE_T0', 5)
+        eta_min_ratio = CONFIG.get('COSINE_ETA_MIN_RATIO', 0.01)
         scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
             optimizer,
             T_0=T_0,
@@ -300,14 +305,25 @@ def train_deepfm_kfold(metadata, processor, data_dir):
     for fold, (train_indices, val_indices) in enumerate(kfold.split(full_targets, full_targets)):
         print(f"\n📊 Fold {fold+1}/{KFOLD_CONFIG['n_splits']}")
 
-        # 모델 생성
-        model = OptimizedDeepFM(
-            feature_dims=processor.categorical_feature_dims,
-            default_embedding_dim=DEEPFM_CONFIG.get('EMBEDDING_DIM', 16),
-            hidden_units=DEEPFM_CONFIG.get('HIDDEN_DIMS', [256, 128]),
-            dropout=DEEPFM_CONFIG.get('DROPOUT', 0.2),
-            num_numerical=len(processor.numerical_features)
-        ).to(device)
+        # 모델 생성 (Dynamic Embedding or v2.2 Original)
+        if USE_DYNAMIC_EMBEDDING:
+            model = DynamicEmbeddingDeepFM(
+                feature_dims=processor.categorical_feature_dims,
+                hidden_units=CONFIG.get('HIDDEN_DIMS', [256, 128]),
+                dropout=CONFIG.get('DROPOUT', 0.25),
+                num_numerical=len(processor.numerical_features),
+                min_embed_dim=CONFIG.get('MIN_EMBED_DIM', 4),
+                max_embed_dim=CONFIG.get('MAX_EMBED_DIM', 50),
+                use_dynamic_embedding=CONFIG.get('USE_DYNAMIC_EMBEDDING', True)
+            ).to(device)
+        else:
+            model = OptimizedDeepFM(
+                feature_dims=processor.categorical_feature_dims,
+                default_embedding_dim=CONFIG.get('EMBEDDING_DIM', 16),
+                hidden_units=CONFIG.get('HIDDEN_DIMS', [256, 128]),
+                dropout=CONFIG.get('DROPOUT', 0.2),
+                num_numerical=len(processor.numerical_features)
+            ).to(device)
 
         # 폴드 데이터 준비
         train_cat, train_num, train_tgt, val_cat, val_num, val_tgt = prepare_fold_data(
@@ -315,7 +331,7 @@ def train_deepfm_kfold(metadata, processor, data_dir):
         )
 
         # 데이터 로더 생성
-        batch_size = DEEPFM_CONFIG.get('BATCH_SIZE', 1024)
+        batch_size = CONFIG.get('BATCH_SIZE', 1024)
         train_loader = DeepFMKFoldDataLoader(
             train_cat, train_num, train_tgt, batch_size=batch_size, shuffle=True, seed=42
         )
@@ -342,7 +358,27 @@ def train_deepfm_kfold(metadata, processor, data_dir):
 
         print(f"   Fold {fold+1} Competition Score: {fold_score:.6f}")
 
-        # WandB 로깅 제거 - 최종 결과에서만 통합 로깅
+        # 🎯 각 Fold 완료 후 WandB에 실시간 로깅 (XGBoost 스타일)
+        # 누적 평균 계산
+        completed_fold_scores = [r['comp_score'] for r in fold_results]
+        running_cv_mean = np.mean(completed_fold_scores)
+        running_cv_std = np.std(completed_fold_scores) if len(completed_fold_scores) > 1 else 0
+
+        wandb.log({
+            # 현재 Fold 메트릭
+            'fold_comp_score': fold_score,
+            'fold_number': fold + 1,
+            'completed_folds': fold + 1,
+
+            # 누적 통계 (실시간 예상 점수)
+            'running_cv_mean': running_cv_mean,
+            'running_cv_std': running_cv_std,
+
+            # 진행률
+            'progress': (fold + 1) / KFOLD_CONFIG['n_splits'],
+        })
+
+        print(f"   📊 Running CV Mean (after {fold+1} folds): {running_cv_mean:.6f} ± {running_cv_std:.6f}")
 
         # 메모리 정리
         del train_loader, val_loader, model
@@ -375,13 +411,20 @@ def evaluate_kfold_results(full_targets, oof_predictions, fold_results):
     print(f"\n🎯 Out-of-Fold Metrics:")
     print(f"  OOF Competition Score: {oof_comp_score:.6f}")
 
-    # WandB 로깅 - 핵심 메트릭만 (개별 fold 차트 제거)
+    # WandB 최종 요약 로깅 (XGBoost 스타일)
     wandb.log({
-        'cv_comp_score_mean': cv_mean,
-        'cv_comp_score_std': cv_std,
-        'oof_comp_score': oof_comp_score,
+        # 📊 최종 성능 메트릭
+        'final_cv_mean': cv_mean,
+        'final_cv_std': cv_std,
+        'final_oof_score': oof_comp_score,
+
+        # 📈 Fold 통계
         'best_fold_score': max(fold_scores),
         'worst_fold_score': min(fold_scores),
+        'fold_score_range': max(fold_scores) - min(fold_scores),
+
+        # 🎯 성능 지표
+        'cv_stability': 1 - (cv_std / cv_mean) if cv_mean > 0 else 0,  # 높을수록 안정적
     })
 
     # 개별 fold 점수는 summary에만 기록 (차트 생성 안 됨)
@@ -408,7 +451,7 @@ def save_kfold_models(models, oof_predictions, processor, metadata, results, run
             'fold': i + 1,
             'processor': processor,
             'metadata': metadata,
-            'config': DEEPFM_CONFIG.copy()
+            'config': CONFIG.copy()  # Dynamic or v2.2 config 저장
         }, f'{save_dir}/fold_{i+1}_model.pth')
 
     # 예측 결과 저장
@@ -424,11 +467,12 @@ def save_kfold_models(models, oof_predictions, processor, metadata, results, run
 
 def main():
     """메인 훈련 함수"""
-    print("🚀 DeepFM K-Fold Cross Validation Training")
-    print("Using Clean Independent Architecture")
+    model_type = "Dynamic Embedding (v2.2 based)" if USE_DYNAMIC_EMBEDDING else "v2.2 Original"
+    print(f"🚀 DeepFM K-Fold Cross Validation Training - {model_type}")
+    print(f"Using {'DynamicEmbeddingDeepFM' if USE_DYNAMIC_EMBEDDING else 'OptimizedDeepFM'} Architecture")
 
     # 시드 고정
-    seed = DEEPFM_CONFIG.get('SEED', 42)
+    seed = CONFIG.get('SEED', 42)
     seed_everything(seed)
     print(f"Seed fixed: {seed}")
 
@@ -438,20 +482,22 @@ def main():
     metadata, processor, data_dir = load_prepared_deepfm_data()
 
     # WandB 초기화
-    run_name = f'deepfm-kfold-{datetime.now().strftime("%m%d_%H%M")}'
+    arch_tag = 'dynamic-embedding' if USE_DYNAMIC_EMBEDDING else 'v2.2-original'
+    run_name = f'deepfm-{arch_tag}-kfold-{datetime.now().strftime("%m%d_%H%M")}'
     wandb.init(
         project=WANDB_CONFIG['PROJECT'],
         entity=WANDB_CONFIG.get('ENTITY'),
         name=run_name,
-        tags=['deepfm', 'kfold', 'cross-validation', 'new-architecture']
+        tags=['deepfm', 'kfold', arch_tag, 'v2.2-based']
     )
 
     wandb.config.update({
-        **DEEPFM_CONFIG,
+        **CONFIG,
         **KFOLD_CONFIG,
-        'model_type': 'OptimizedDeepFM',
+        'model_type': 'DynamicEmbeddingDeepFM' if USE_DYNAMIC_EMBEDDING else 'OptimizedDeepFM',
         'processor_type': 'DeepFMProcessor',
-        'architecture': 'clean_independent_kfold',
+        'architecture': f'v2.2_{arch_tag}',
+        'use_dynamic_embedding': USE_DYNAMIC_EMBEDDING,
         'total_features': metadata['feature_info']['total_features']
     })
 
@@ -486,23 +532,49 @@ def main():
     print(f"   Training Time: {train_time:.2f}s ({train_time/60:.1f}min)")
     print(f"   Total Time: {total_time:.2f}s ({total_time/60:.1f}min)")
     print(f"📁 Models saved: {save_dir}")
-    print(f"🏆 Architecture: Clean Independent DeepFM with K-Fold")
+
+    if USE_DYNAMIC_EMBEDDING:
+        print(f"🏆 Architecture: DeepFM v2.2 + Dynamic Embedding (6×card^0.25)")
+    else:
+        print(f"🏆 Architecture: DeepFM v2.2 Original")
 
     # 목표 달성 체크
-    target_score = 0.355
-    if final_results['oof_comp_score'] >= target_score:
-        print(f"🎉 TARGET ACHIEVED! OOF Score: {final_results['oof_comp_score']:.6f} >= {target_score}")
-    else:
-        improvement = target_score - final_results['oof_comp_score']
-        print(f"🔄 Continue optimization. Need +{improvement:.6f} improvement")
+    baseline_score = 0.3507  # v2.2 OOF 기준
+    target_score = 0.3537    # +0.003 개선 목표 (Dynamic Embedding)
 
-    # WandB 최종 로깅
+    if final_results['oof_comp_score'] >= target_score:
+        improvement = final_results['oof_comp_score'] - baseline_score
+        print(f"🎉 TARGET ACHIEVED! OOF Score: {final_results['oof_comp_score']:.6f}")
+        print(f"   Improvement vs v2.2 baseline: +{improvement:.6f}")
+    elif final_results['oof_comp_score'] > baseline_score:
+        improvement = final_results['oof_comp_score'] - baseline_score
+        remaining = target_score - final_results['oof_comp_score']
+        print(f"✅ IMPROVED! OOF Score: {final_results['oof_comp_score']:.6f}")
+        print(f"   Improvement vs v2.2: +{improvement:.6f}")
+        print(f"   Remaining to target: +{remaining:.6f}")
+    else:
+        decline = baseline_score - final_results['oof_comp_score']
+        print(f"⚠️ Lower than baseline. OOF Score: {final_results['oof_comp_score']:.6f}")
+        print(f"   Decline vs v2.2: -{decline:.6f}")
+
+    # WandB 최종 로깅 (XGBoost 스타일 + 추가 메트릭)
     wandb.log({
+        # 성능 메트릭
         'final_cv_mean': final_results['cv_mean'],
         'final_oof_score': final_results['oof_comp_score'],
-        'total_training_time': train_time,
-        'total_time': total_time,
-        'target_achieved': final_results['oof_comp_score'] >= target_score
+        'improvement_vs_baseline': final_results['oof_comp_score'] - baseline_score,
+
+        # 시간 메트릭
+        'training_time_minutes': train_time / 60,
+        'total_time_minutes': total_time / 60,
+
+        # 목표 달성
+        'target_achieved': final_results['oof_comp_score'] >= target_score,
+
+        # 추가 통계
+        'cv_std': final_results['cv_std'],
+        'best_fold': max(final_results['fold_scores']),
+        'worst_fold': min(final_results['fold_scores']),
     })
 
     wandb.finish()
