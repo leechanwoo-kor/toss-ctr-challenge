@@ -15,8 +15,17 @@ sys.path.append(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 )
 
-from src.utils.config import XGBOOST_CONFIG, XGBOOST_WANDB_CONFIG, KFOLD_CONFIG
+from src.utils.config import (
+    XGBOOST_CONFIG,
+    XGBOOST_CONFIG_V6,
+    XGBOOST_WANDB_CONFIG,
+    KFOLD_CONFIG,
+)
 from src.utils.metrics import calculate_competition_metrics
+
+# 🎯 v6 실험: 균형잡힌 과적합 방지 (Target: Public 0.351-0.352)
+USE_V6_CONFIG = True  # True: v6 (균형), False: v4 (현재)
+CONFIG = XGBOOST_CONFIG_V6 if USE_V6_CONFIG else XGBOOST_CONFIG
 
 
 # WandB 콜백 제거 - fold 완료 시점에만 핵심 메트릭 로깅으로 단순화
@@ -179,7 +188,7 @@ def main():
         tags=XGBOOST_WANDB_CONFIG["TAGS"] + ["kfold"],
         notes="XGBoost with K-Fold Cross Validation",
         config={
-            **XGBOOST_CONFIG,
+            **CONFIG,
             **KFOLD_CONFIG,
             "data_load_time": data_time,
             "num_features": train_X.shape[1],
@@ -187,13 +196,14 @@ def main():
             "val_samples": len(val_X),
             "train_ctr": train_y.mean(),
             "val_ctr": val_y.mean(),
+            "xgboost_version": "v6" if USE_V6_CONFIG else "v4",
         },
     )
 
     # Train K-Fold models
     train_start = time.time()
     models, oof_predictions, val_predictions, fold_scores = train_kfold_xgboost(
-        train_X, train_y, val_X, val_y, XGBOOST_CONFIG, KFOLD_CONFIG
+        train_X, train_y, val_X, val_y, CONFIG, KFOLD_CONFIG
     )
     train_time = time.time() - train_start
 
