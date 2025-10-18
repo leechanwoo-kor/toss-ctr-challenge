@@ -55,7 +55,7 @@ DEEPFM_DYNAMIC_CONFIG = {
     "SEED": 42,
     "EARLY_STOPPING": 7,  # v2.2와 동일
 
-    # 🎯 Dynamic Embedding 설정 (핵심!)
+    # Dynamic Embedding 설정 (핵심!)
     "USE_DYNAMIC_EMBEDDING": True,  # 동적 embedding 활성화
     "MIN_EMBED_DIM": 4,  # 최소 embedding 차원
     "MAX_EMBED_DIM": 50,  # 최대 embedding 차원
@@ -89,7 +89,7 @@ DEEPFM_DYNAMIC_ENHANCED_CONFIG = {
     "SEED": 42,
     "EARLY_STOPPING": 7,
 
-    # 🎯 Dynamic Embedding 설정 (v1과 동일)
+    # Dynamic Embedding 설정 (v1과 동일)
     "USE_DYNAMIC_EMBEDDING": True,
     "MIN_EMBED_DIM": 4,
     "MAX_EMBED_DIM": 50,
@@ -120,7 +120,7 @@ XDEEPFM_CONFIG = {
     "SEED": 42,
     "EARLY_STOPPING": 5,  # 빠른 수렴 예상
 
-    # 🌟 CIN 설정 (xDeepFM 핵심!) - 튜닝 v2
+    # CIN 설정 (xDeepFM 핵심!) - 튜닝 v2
     "USE_LINEAR": True,  # Linear part (1차) 활성화
     "CIN_LAYER_SIZES": [64, 64],  # [128, 128] → [64, 64] (파라미터 75% 감소)
     "CIN_ACTIVATION": "relu",  # CIN 활성화 함수
@@ -249,13 +249,13 @@ XGBOOST_CONFIG_V6 = {
     "max_depth": 9,
     "learning_rate": 0.03917586621687341,
 
-    # 🎯 학습량: v4(280)와 v5(210)의 중간
+    # 학습량: v4(280)와 v5(210)의 중간
     "n_estimators": 245,                    # 균형점: 충분한 학습 + 과적합 방지
 
-    # 🎯 리프 생성 조건: v4(248)와 v5(285)의 중간
+    # 리프 생성 조건: v4(248)와 v5(285)의 중간
     "min_child_weight": 265,                # 작은 리프 억제, 노이즈 학습 방지
 
-    # 🎯 정규화: v4(0.284)보다 강하게
+    # 정규화: v4(0.284)보다 강하게
     "reg_alpha": 0.27450205788134485,       # L1 유지
     "reg_lambda": 0.32,                     # L2 강화: v4와 v5의 중간값
 
@@ -265,7 +265,7 @@ XGBOOST_CONFIG_V6 = {
     "colsample_bylevel": 0.7408740593918586,
     "colsample_bynode": 0.7522542036638713,
 
-    # 🎯 트리 분할 제약: v4(6.81)와 v5(8.5)의 중간
+    # 트리 분할 제약: v4(6.81)와 v5(8.5)의 중간
     "gamma": 7.6,                           # 의미있는 분할만 허용
 
     "max_delta_step": 3,
@@ -274,7 +274,7 @@ XGBOOST_CONFIG_V6 = {
     "n_jobs": -1,
     "verbosity": 0,
 
-    # 🎯 조기 종료: v4(20)와 v5(15)의 중간
+    # 조기 종료: v4(20)와 v5(15)의 중간
     "early_stopping_rounds": 18,            # 적절한 엄격함
 }
 

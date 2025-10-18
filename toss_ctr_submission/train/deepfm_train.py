@@ -26,7 +26,7 @@ from src.deepfm.deepfm_processor import DeepFMProcessor
 from src.utils.config import DEEPFM_CONFIG, DEEPFM_DYNAMIC_CONFIG, WANDB_CONFIG, KFOLD_CONFIG
 from src.utils.metrics import calculate_competition_metrics
 
-# 🎯 Dynamic Embedding 사용 여부 설정
+# Dynamic Embedding 사용 여부 설정
 USE_DYNAMIC_EMBEDDING = True  # True: Dynamic Embedding, False: v2.2 Original
 CONFIG = DEEPFM_DYNAMIC_CONFIG if USE_DYNAMIC_EMBEDDING else DEEPFM_CONFIG
 
@@ -89,7 +89,7 @@ class DeepFMKFoldDataLoader:
 
 def load_prepared_deepfm_data():
     """DeepFM 전처리된 데이터 로드"""
-    print("📁 Loading prepared DeepFM data...")
+    print("Loading prepared DeepFM data...")
 
     data_dir = "data/processed/deepfm_new"
 
@@ -273,7 +273,7 @@ def train_fold(model, train_loader, val_loader, device, fold_num, max_epochs=Non
 
 def train_deepfm_kfold(metadata, processor, data_dir):
     """DeepFM K-Fold Cross Validation 훈련"""
-    print("🔄 Starting DeepFM K-Fold Cross Validation...")
+    print("Starting DeepFM K-Fold Cross Validation...")
 
     # 전체 훈련 데이터 로드
     print("   Loading full training data...")
@@ -303,7 +303,7 @@ def train_deepfm_kfold(metadata, processor, data_dir):
 
     # 각 폴드 훈련
     for fold, (train_indices, val_indices) in enumerate(kfold.split(full_targets, full_targets)):
-        print(f"\n📊 Fold {fold+1}/{KFOLD_CONFIG['n_splits']}")
+        print(f"\nFold {fold+1}/{KFOLD_CONFIG['n_splits']}")
 
         # 모델 생성 (Dynamic Embedding or v2.2 Original)
         if USE_DYNAMIC_EMBEDDING:
@@ -358,7 +358,7 @@ def train_deepfm_kfold(metadata, processor, data_dir):
 
         print(f"   Fold {fold+1} Competition Score: {fold_score:.6f}")
 
-        # 🎯 각 Fold 완료 후 WandB에 실시간 로깅 (XGBoost 스타일)
+        # 각 Fold 완료 후 WandB에 실시간 로깅 (XGBoost 스타일)
         # 누적 평균 계산
         completed_fold_scores = [r['comp_score'] for r in fold_results]
         running_cv_mean = np.mean(completed_fold_scores)
@@ -378,7 +378,7 @@ def train_deepfm_kfold(metadata, processor, data_dir):
             'progress': (fold + 1) / KFOLD_CONFIG['n_splits'],
         })
 
-        print(f"   📊 Running CV Mean (after {fold+1} folds): {running_cv_mean:.6f} ± {running_cv_std:.6f}")
+        print(f"   Running CV Mean (after {fold+1} folds): {running_cv_mean:.6f} ± {running_cv_std:.6f}")
 
         # 메모리 정리
         del train_loader, val_loader, model
@@ -389,10 +389,10 @@ def train_deepfm_kfold(metadata, processor, data_dir):
 
 def evaluate_kfold_results(full_targets, oof_predictions, fold_results):
     """K-Fold 결과 평가"""
-    print("\n🔮 Evaluating K-Fold results...")
+    print("\nEvaluating K-Fold results...")
 
     # 개별 폴드 결과
-    print("\n📊 Individual Fold Results:")
+    print("\nIndividual Fold Results:")
     for result in fold_results:
         print(f"  Fold {result['fold']}: CompScore={result['comp_score']:.6f}")
 
@@ -401,29 +401,29 @@ def evaluate_kfold_results(full_targets, oof_predictions, fold_results):
     cv_mean = np.mean(fold_scores)
     cv_std = np.std(fold_scores)
 
-    print(f"\n📈 Cross-Validation Results:")
+    print(f"\nCross-Validation Results:")
     print(f"  CV Competition Score: {cv_mean:.6f} ± {cv_std:.6f}")
 
     # Out-of-fold 메트릭
     oof_metrics = calculate_competition_metrics(full_targets.numpy(), oof_predictions)
     oof_comp_score = oof_metrics['comp_score'] if isinstance(oof_metrics, dict) else oof_metrics
 
-    print(f"\n🎯 Out-of-Fold Metrics:")
+    print(f"\nOut-of-Fold Metrics:")
     print(f"  OOF Competition Score: {oof_comp_score:.6f}")
 
     # WandB 최종 요약 로깅 (XGBoost 스타일)
     wandb.log({
-        # 📊 최종 성능 메트릭
+        # 최종 성능 메트릭
         'final_cv_mean': cv_mean,
         'final_cv_std': cv_std,
         'final_oof_score': oof_comp_score,
 
-        # 📈 Fold 통계
+        # Fold 통계
         'best_fold_score': max(fold_scores),
         'worst_fold_score': min(fold_scores),
         'fold_score_range': max(fold_scores) - min(fold_scores),
 
-        # 🎯 성능 지표
+        # 성능 지표
         'cv_stability': 1 - (cv_std / cv_mean) if cv_mean > 0 else 0,  # 높을수록 안정적
     })
 
@@ -461,14 +461,14 @@ def save_kfold_models(models, oof_predictions, processor, metadata, results, run
     with open(f'{save_dir}/kfold_results.pkl', 'wb') as f:
         pickle.dump(results, f)
 
-    print(f"📁 K-Fold models saved: {save_dir}")
+    print(f"K-Fold models saved: {save_dir}")
     return save_dir
 
 
 def main():
     """메인 훈련 함수"""
     model_type = "Dynamic Embedding (v2.2 based)" if USE_DYNAMIC_EMBEDDING else "v2.2 Original"
-    print(f"🚀 DeepFM K-Fold Cross Validation Training - {model_type}")
+    print(f"DeepFM K-Fold Cross Validation Training - {model_type}")
     print(f"Using {'DynamicEmbeddingDeepFM' if USE_DYNAMIC_EMBEDDING else 'OptimizedDeepFM'} Architecture")
 
     # 시드 고정
@@ -502,7 +502,7 @@ def main():
     })
 
     # K-Fold 훈련
-    print(f"\n🚀 Starting {KFOLD_CONFIG['n_splits']}-Fold training...")
+    print(f"\nStarting {KFOLD_CONFIG['n_splits']}-Fold training...")
     train_start_time = time.time()
 
     fold_results, oof_predictions, models = train_deepfm_kfold(metadata, processor, data_dir)
@@ -523,20 +523,20 @@ def main():
 
     # 최종 결과
     print("\n" + "="*70)
-    print("🎉 DeepFM K-Fold Training Complete!")
+    print("DeepFM K-Fold Training Complete!")
     print("="*70)
-    print(f"📊 Final Results:")
+    print(f"Final Results:")
     print(f"   CV Competition Score: {final_results['cv_mean']:.6f} ± {final_results['cv_std']:.6f}")
     print(f"   OOF Competition Score: {final_results['oof_comp_score']:.6f}")
     print(f"   Best Fold Score: {max(final_results['fold_scores']):.6f}")
     print(f"   Training Time: {train_time:.2f}s ({train_time/60:.1f}min)")
     print(f"   Total Time: {total_time:.2f}s ({total_time/60:.1f}min)")
-    print(f"📁 Models saved: {save_dir}")
+    print(f"Models saved: {save_dir}")
 
     if USE_DYNAMIC_EMBEDDING:
-        print(f"🏆 Architecture: DeepFM v2.2 + Dynamic Embedding (6×card^0.25)")
+        print(f"Architecture: DeepFM v2.2 + Dynamic Embedding (6×card^0.25)")
     else:
-        print(f"🏆 Architecture: DeepFM v2.2 Original")
+        print(f"Architecture: DeepFM v2.2 Original")
 
     # 목표 달성 체크
     baseline_score = 0.3507  # v2.2 OOF 기준
@@ -544,17 +544,17 @@ def main():
 
     if final_results['oof_comp_score'] >= target_score:
         improvement = final_results['oof_comp_score'] - baseline_score
-        print(f"🎉 TARGET ACHIEVED! OOF Score: {final_results['oof_comp_score']:.6f}")
+        print(f"TARGET ACHIEVED! OOF Score: {final_results['oof_comp_score']:.6f}")
         print(f"   Improvement vs v2.2 baseline: +{improvement:.6f}")
     elif final_results['oof_comp_score'] > baseline_score:
         improvement = final_results['oof_comp_score'] - baseline_score
         remaining = target_score - final_results['oof_comp_score']
-        print(f"✅ IMPROVED! OOF Score: {final_results['oof_comp_score']:.6f}")
+        print(f"IMPROVED! OOF Score: {final_results['oof_comp_score']:.6f}")
         print(f"   Improvement vs v2.2: +{improvement:.6f}")
         print(f"   Remaining to target: +{remaining:.6f}")
     else:
         decline = baseline_score - final_results['oof_comp_score']
-        print(f"⚠️ Lower than baseline. OOF Score: {final_results['oof_comp_score']:.6f}")
+        print(f"Lower than baseline. OOF Score: {final_results['oof_comp_score']:.6f}")
         print(f"   Decline vs v2.2: -{decline:.6f}")
 
     # WandB 최종 로깅 (XGBoost 스타일 + 추가 메트릭)
@@ -584,9 +584,9 @@ def main():
 if __name__ == "__main__":
     try:
         results = main()
-        print(f"\n✅ K-Fold training completed successfully!")
-        print(f"🎯 OOF Competition Score: {results['oof_comp_score']:.6f}")
+        print(f"\nK-Fold training completed successfully!")
+        print(f"OOF Competition Score: {results['oof_comp_score']:.6f}")
     except Exception as e:
-        print(f"\n❌ K-Fold training failed: {e}")
+        print(f"\nK-Fold training failed: {e}")
         import traceback
         traceback.print_exc()

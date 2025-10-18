@@ -23,7 +23,7 @@ from src.utils.config import (
 )
 from src.utils.metrics import calculate_competition_metrics
 
-# 🎯 v6 실험: 균형잡힌 과적합 방지 (Target: Public 0.351-0.352)
+# v6 실험: 균형잡힌 과적합 방지 (Target: Public 0.351-0.352)
 USE_V6_CONFIG = True  # True: v6 (균형), False: v4 (현재)
 CONFIG = XGBOOST_CONFIG_V6 if USE_V6_CONFIG else XGBOOST_CONFIG
 
