@@ -1,0 +1,55 @@
+Traceback (most recent call last):
+  File "C:\Users\Admin\anaconda3\envs\ctr\Lib\site-packages\xgboost\data.py", line 407, in pandas_feature_info
+    new_feature_types.append(_pandas_dtype_mapper[dtype.name])
+                             ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+KeyError: 'object'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\ctr\toss_ctr_submission\inference.py", line 331, in <module>
+    main()
+  File "D:\ctr\toss_ctr_submission\inference.py", line 310, in main
+    xgb_preds, test_ids = predict_xgboost(TEST_DATA_PATH, XGBOOST_CHECKPOINT_DIR)
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\ctr\toss_ctr_submission\inference.py", line 117, in predict_xgboost
+    dtest = xgb.DMatrix(X_test)
+            ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\anaconda3\envs\ctr\Lib\site-packages\xgboost\core.py", line 729, in inner_f
+    return func(**kwargs)
+           ^^^^^^^^^^^^^^
+  File "C:\Users\Admin\anaconda3\envs\ctr\Lib\site-packages\xgboost\core.py", line 885, in __init__
+    handle, feature_names, feature_types = dispatch_data_backend(
+                                           ^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\anaconda3\envs\ctr\Lib\site-packages\xgboost\data.py", line 1441, in dispatch_data_backend
+    return _from_pandas_df(
+           ^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\anaconda3\envs\ctr\Lib\site-packages\xgboost\data.py", line 674, in _from_pandas_df
+    df, feature_names, feature_types = _transform_pandas_df(
+                                       ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\anaconda3\envs\ctr\Lib\site-packages\xgboost\data.py", line 640, in _transform_pandas_df
+    feature_names, feature_types = pandas_feature_info(
+                                   ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\anaconda3\envs\ctr\Lib\site-packages\xgboost\data.py", line 409, in pandas_feature_info
+    _invalid_dataframe_dtype(data)
+  File "C:\Users\Admin\anaconda3\envs\ctr\Lib\site-packages\xgboost\data.py", line 372, in _invalid_dataframe_dtype
+    raise ValueError(msg)
+ValueError: DataFrame.dtypes for data must be int, float, bool or category. When categorical type is supplied, the experimental DMatrix parameter`enable_categorical` must be set to `True`.  Invalid columns:gender: object, age_group: object, inventory_id: object, day_of_week: object, hour: object
+
+ERROR conda.cli.main_run:execute(49): `conda run python inference.py` failed. (See above for error)
+
+======================================================================
+Toss CTR Challenge - Final Inference
+======================================================================
+Timestamp: 2025-10-17 21:17:06
+Random Seed: 42
+
+======================================================================
+1. XGBoost v6 Prediction
+======================================================================
+Loading test data from: D:\ctr\toss_ctr_submission\data/test.parquet
+Test samples: 1,527,298
+Loading XGBoost models from: D:\ctr\toss_ctr_submission\checkpoints/xgboost
+Found 5 fold models
+Loading xgboost_fold_1.json...
+
