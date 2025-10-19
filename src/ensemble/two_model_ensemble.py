@@ -4,13 +4,14 @@ XGBoost + DeepFM K-Fold 2-Model Ensemble
 import pandas as pd
 import numpy as np
 from datetime import datetime
+from pathlib import Path
 
 def main():
     print("=== XGBoost + DeepFM K-Fold 2-Model Ensemble ===")
 
     # 파일 경로
-    xgboost_file = "submissions/xgboost/xgboost_kfold_1012_1727.csv" # v6
-    deepfm_file = "submissions/deepfm/deepfm_kfold_ensemble_20251011_000856.csv"  # v2.2 embedding
+    xgboost_file = "submissions/xgboost/xgboost_kfold_1019_1310.csv" # v6
+    deepfm_file = "submissions/deepfm/deepfm_kfold_ensemble_20251019_125533.csv"  # v2.2 embedding
 
     # 데이터 로드
     print("Loading predictions...")
@@ -35,6 +36,10 @@ def main():
     ]
 
     timestamp = datetime.now().strftime('%m%d_%H%M')
+
+    # 출력 디렉토리 생성
+    output_dir = Path("submissions/ensemble")
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     # 각 조합별 앙상블 생성
     for xgb_weight, deepfm_weight, name in weight_combinations:

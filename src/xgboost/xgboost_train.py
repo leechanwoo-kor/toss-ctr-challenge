@@ -6,7 +6,6 @@ import pandas as pd
 import xgboost as xgb
 from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import roc_auc_score
-import wandb
 import pickle
 from datetime import datetime
 
@@ -147,17 +146,7 @@ def train_kfold_xgboost(X, y, val_X, val_y, config, kfold_config):
 
         print(f"   Fold {fold + 1} AUC: {fold_auc:.6f}")
         print(f"   Fold {fold + 1} Competition Score: {fold_comp_score:.6f}")
-
-        # 각 fold 완료 후 WandB에 로깅 - 통합 메트릭으로
-        wandb.log(
-            {
-                "fold_auc": fold_auc,
-                "fold_comp_score": fold_comp_score,
-                "best_iteration": model.best_iteration,
-                "completed_folds": fold + 1,
-                "fold_number": fold + 1,
-            }
-        )
+        
 
     return models, oof_predictions, val_predictions, fold_scores
 
@@ -181,24 +170,6 @@ def main():
     timestamp = datetime.now().strftime("%m%d_%H%M")
     run_name = f"xgboost-kfold-{timestamp}"
 
-    wandb.init(
-        project=XGBOOST_WANDB_CONFIG["PROJECT"],
-        entity=XGBOOST_WANDB_CONFIG["ENTITY"],
-        name=run_name,
-        tags=XGBOOST_WANDB_CONFIG["TAGS"] + ["kfold"],
-        notes="XGBoost with K-Fold Cross Validation",
-        config={
-            **CONFIG,
-            **KFOLD_CONFIG,
-            "data_load_time": data_time,
-            "num_features": train_X.shape[1],
-            "train_samples": len(train_X),
-            "val_samples": len(val_X),
-            "train_ctr": train_y.mean(),
-            "val_ctr": val_y.mean(),
-            "xgboost_version": "v6" if USE_V6_CONFIG else "v4",
-        },
-    )
 
     # Train K-Fold models
     train_start = time.time()
@@ -267,25 +238,6 @@ def main():
         f"{model_dir}/val_predictions.parquet"
     )
 
-    # 핵심 메트릭만 WandB에 로깅 (차트 깔끔하게)
-    wandb.log(
-        {
-            # 성능 메트릭 (가장 중요)
-            "final_val_comp_score": val_metrics["val_comp_score"],
-            "final_val_auc": val_metrics["val_auc"],
-            "final_cv_comp_score": np.mean(fold_comp_scores),
-            "final_cv_auc": np.mean(fold_aucs),
-            "cv_std": np.std(fold_comp_scores),
-
-            # 시간 메트릭
-            "training_time_minutes": train_time / 60,
-            "total_time_minutes": (time.time() - start_time) / 60,
-
-            # 목표 달성 여부
-            "target_achieved": val_metrics["val_comp_score"] >= 0.35,
-        }
-    )
-
     total_time = time.time() - start_time
 
     print("\n" + "=" * 50)
@@ -302,8 +254,6 @@ def main():
     print(f"Target: {target_score}+ (current: {val_metrics['val_comp_score']:.6f})")
     if achieved:
         print("TARGET ACHIEVED with K-Fold ensemble!")
-
-    wandb.finish()
 
 
 if __name__ == "__main__":
