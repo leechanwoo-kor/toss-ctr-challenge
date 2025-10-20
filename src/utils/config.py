@@ -1,9 +1,9 @@
 """
 모델별 하이퍼파라미터 설정 - Toss CTR Challenge
-각 모델(DeepFM, XGBoost, LightGBM, CatBoost)의 하이퍼파라미터 및 실험 설정 관리
+각 모델(DeepFM, XGBoost)의 하이퍼파라미터 및 실험 설정 관리
 
 역할:
-- 모델별 하이퍼파라미터 (DeepFM, XGBoost, LightGBM, CatBoost)
+- 모델별 하이퍼파라미터 (DeepFM, XGBoost)
 - WandB 설정
 - Optuna 최적화 설정
 - K-Fold 교차검증 설정
