@@ -16,16 +16,16 @@ from src.models.xgboost_feature_processor import XGBoostFeatureProcessor
 
 def prepare_xgboost_data():
     """피처 엔지니어링이 적용된 XGBoost 데이터 준비"""
-    print("🚀 Preparing XGBoost data with EDA features...")
+    print(" Preparing XGBoost data with EDA features...")
     start_time = time.time()
 
     # 1. 원본 데이터 로드
-    print("📁 Loading raw data...")
+    print(" Loading raw data...")
     all_train = pd.read_parquet("data/train.parquet", engine="pyarrow")
     print(f"Full training data loaded: {all_train.shape}")
 
     # 2. XGBoost 프로세서로 피처 처리
-    print("🚀 Processing features with EDA features...")
+    print(" Processing features with EDA features...")
     processor = XGBoostFeatureProcessor()
 
     # 타겟 분리 전에 EDA 피처 생성 (clicked 컬럼 필요)
@@ -48,7 +48,7 @@ def prepare_xgboost_data():
     print(f"Train CTR: {y_train.mean():.4f}, Val CTR: {y_val.mean():.4f}")
 
     # 4. 메모리 최적화
-    print("💾 Optimizing memory usage...")
+    print(" Optimizing memory usage...")
     for col in X_train.columns:
         if X_train[col].dtype == "int64":
             X_train[col] = X_train[col].astype("int32")
@@ -59,7 +59,7 @@ def prepare_xgboost_data():
 
     # 5. 피처 요약
     feature_groups = processor.get_feature_importance_groups()
-    print(f"\n📊 Feature Summary:")
+    print(f"\n Feature Summary:")
     for group_name, features in feature_groups.items():
         available_features = [f for f in features if f in X_train.columns]
         print(f"  {group_name}: {len(available_features)} features")
@@ -68,10 +68,10 @@ def prepare_xgboost_data():
     output_dir = "data/processed/xgboost"
     os.makedirs(output_dir, exist_ok=True)
 
-    print(f"\n💾 Saving to {output_dir}...")
+    print(f"\n Saving to {output_dir}...")
 
     # 데이터 저장 (메모리 효율적 방법)
-    print("💾 Saving arrays with memory optimization...")
+    print(" Saving arrays with memory optimization...")
     X_train_array = X_train.to_numpy(dtype=np.float32)
     X_val_array = X_val.to_numpy(dtype=np.float32)
 
@@ -119,9 +119,9 @@ def prepare_xgboost_data():
     gc.collect()
 
     total_time = time.time() - start_time
-    print(f"\n🎉 XGBoost data preparation completed!")
+    print(f"\n XGBoost data preparation completed!")
     print(f"⏱️  Total time: {total_time:.2f} seconds")
-    print(f"📁 Saved to: {output_dir}")
+    print(f" Saved to: {output_dir}")
     print(f"🆕 Added {len(processor.new_features)} new features")
 
     return metadata
@@ -130,9 +130,9 @@ def prepare_xgboost_data():
 if __name__ == "__main__":
     try:
         metadata = prepare_xgboost_data()
-        print("\n✅ Success! Ready for XGBoost training.")
+        print("\n Success! Ready for XGBoost training.")
     except Exception as e:
-        print(f"\n❌ Error: {e}")
+        print(f"\n Error: {e}")
         import traceback
 
         traceback.print_exc()

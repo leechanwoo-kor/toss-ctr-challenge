@@ -7,19 +7,13 @@ from datetime import datetime
 from pathlib import Path
 
 def main():
-    print("=== XGBoost + DeepFM K-Fold 2-Model Ensemble ===")
-
     # 파일 경로
     xgboost_file = "submissions/xgboost/xgboost_kfold_1019_1310.csv" # v6
     deepfm_file = "submissions/deepfm/deepfm_kfold_ensemble_20251019_125533.csv"  # v2.2 embedding
 
     # 데이터 로드
-    print("Loading predictions...")
     xgb_df = pd.read_csv(xgboost_file)
     deepfm_df = pd.read_csv(deepfm_file)
-
-    print(f"XGBoost: {len(xgb_df):,} predictions")
-    print(f"DeepFM: {len(deepfm_df):,} predictions")
 
     # ID 정렬 확인
     xgb_df = xgb_df.sort_values('ID').reset_index(drop=True)
@@ -49,17 +43,10 @@ def main():
         result_df = xgb_df[['ID']].copy()
         result_df['clicked'] = ensemble_preds
 
-        # 예상 점수 계산 (실제 Public LB 기준)
-        # XGBoost Public: 0.348568, DeepFM v2.2 Public: 0.346596
-        expected_score = xgb_weight * 0.348568 + deepfm_weight * 0.346596
-
         filename = f"ensemble_xgb_deepfm_{name}_{timestamp}.csv"
         result_df.to_csv(f"submissions/ensemble/{filename}", index=False)
 
-        print(f"{name}: Expected {expected_score:.4f}, XGB {xgb_weight:.2f} + DeepFM {deepfm_weight:.2f}")
-        print(f"  Saved: {filename}")
-        print(f"  Stats: min={ensemble_preds.min():.4f}, max={ensemble_preds.max():.4f}, mean={ensemble_preds.mean():.4f}")
-        print()
+        print(f"{name}: Saved {filename}")
 
 if __name__ == "__main__":
     main()

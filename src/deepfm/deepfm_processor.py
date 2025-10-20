@@ -13,8 +13,6 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from src.utils.sequence_utils import process_sequence_features
-
 
 class DeepFMProcessor:
     """독립적인 DeepFM 피처 프로세서"""
@@ -40,16 +38,16 @@ class DeepFMProcessor:
 
     def fit_transform(self, df):
         """훈련 데이터 처리 및 프로세서 학습"""
-        print("🚀 DeepFM Processor: Training data processing...")
+        print(" DeepFM Processor: Training data processing...")
 
         df = df.copy()
 
         # 1. EDA 기반 피처 생성 먼저 (범주형 인코딩 전에)
-        print("🏪 Creating EDA features...")
+        print(" Creating EDA features...")
         df = self._create_eda_features(df, is_training=True)
 
         # 2. 범주형 피처 인코딩 (EDA 피처 생성 후에)
-        print("📊 Encoding categorical features...")
+        print(" Encoding categorical features...")
         for col in self.categorical_features:
             if col in df.columns:
                 # 결측치 처리
@@ -67,7 +65,7 @@ class DeepFMProcessor:
 
         # 3. 시퀀스 피처 처리 - DISABLED (순수 DeepFM 테스트)
         if 'seq' in df.columns:
-            print("📈 Removing sequence column (pure DeepFM test)...")
+            print(" Removing sequence column (pure DeepFM test)...")
             df = df.drop('seq', axis=1)
             print("   Sequence column removed - using only categorical/numerical features")
 
@@ -106,7 +104,7 @@ class DeepFMProcessor:
             print(f"   Scaled {len(self.numerical_features)} numerical features")
             print(f"   Saved {len(self.numerical_medians)} median values for inference")
 
-        print(f"✅ Processing complete!")
+        print(f" Processing complete!")
         print(f"   Categorical: {len(self.categorical_features)} features")
         print(f"   Numerical: {len(self.numerical_features)} features")
         print(f"   Total: {len(self.categorical_features) + len(self.numerical_features)} features")
@@ -164,7 +162,7 @@ class DeepFMProcessor:
 
             print(f"   Applied scaler to {len(numerical_cols)} features (using learned medians)")
 
-        print(f"✅ Transform complete: {df.shape}")
+        print(f" Transform complete: {df.shape}")
         return df
 
     def _create_eda_features(self, df, is_training=True):

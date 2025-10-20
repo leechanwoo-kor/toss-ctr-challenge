@@ -17,17 +17,12 @@ sys.path.append(
 from src.utils.config import (
     XGBOOST_CONFIG,
     XGBOOST_CONFIG_V6,
-    XGBOOST_WANDB_CONFIG,
     KFOLD_CONFIG,
 )
 from src.utils.metrics import calculate_competition_metrics
 
-# 🎯 v6 실험: 균형잡힌 과적합 방지 (Target: Public 0.351-0.352)
-USE_V6_CONFIG = True  # True: v6 (균형), False: v4 (현재)
+USE_V6_CONFIG = True
 CONFIG = XGBOOST_CONFIG_V6 if USE_V6_CONFIG else XGBOOST_CONFIG
-
-
-# WandB 콜백 제거 - fold 완료 시점에만 핵심 메트릭 로깅으로 단순화
 
 
 # Constants
@@ -114,8 +109,6 @@ def train_kfold_xgboost(X, y, val_X, val_y, config, kfold_config):
         # Train model for this fold
         print(f"Training fold {fold + 1}...")
         watchlist = [(dtrain, "train"), (dvalid, "valid")]
-
-        # WandB 콜백은 제거하고 fold 완료 시에만 로깅 (더 깔끔한 차트)
         model = xgb.train(
             config,
             dtrain,
@@ -166,12 +159,9 @@ def main():
         print(f"Error during data loading: {e}")
         return
 
-    # Initialize WandB
+    # Train K-Fold models
     timestamp = datetime.now().strftime("%m%d_%H%M")
     run_name = f"xgboost-kfold-{timestamp}"
-
-
-    # Train K-Fold models
     train_start = time.time()
     models, oof_predictions, val_predictions, fold_scores = train_kfold_xgboost(
         train_X, train_y, val_X, val_y, CONFIG, KFOLD_CONFIG

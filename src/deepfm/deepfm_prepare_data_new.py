@@ -22,7 +22,7 @@ from src.utils.config import DEEPFM_CONFIG
 
 def create_deepfm_datasets(X_train, X_val, y_train, y_val, processor, save_dir):
     """DeepFM용 데이터셋 생성 및 저장"""
-    print("\n🔄 Creating DeepFM datasets...")
+    print("\n Creating DeepFM datasets...")
 
     def convert_to_torch_tensors(X, y):
         """DataFrame을 DeepFM 모델용 텐서로 변환"""
@@ -69,19 +69,19 @@ def create_deepfm_datasets(X_train, X_val, y_train, y_val, processor, save_dir):
         'targets': val_targets
     }, f"{save_dir}/val_dataset.pt")
 
-    print(f"✅ Datasets saved to {save_dir}")
+    print(f" Datasets saved to {save_dir}")
     return train_categorical, train_numerical, train_targets
 
 
 def main():
-    print("🚀 DeepFM Data Preparation (New Architecture)")
+    print(" DeepFM Data Preparation (New Architecture)")
     print("Using independent DeepFMProcessor - No XGBoost dependency!")
 
     start_time = time.time()
 
     try:
         # 1. 데이터 로드
-        print("\n📊 Loading raw data...")
+        print("\n Loading raw data...")
         train_data = pd.read_parquet("data/train.parquet", engine="pyarrow")
         print(f"Training data loaded: {train_data.shape}")
 
@@ -100,7 +100,7 @@ def main():
         processor = DeepFMProcessor()
         processed_df = processor.fit_transform(train_data)
 
-        print(f"✅ Data processing complete!")
+        print(f" Data processing complete!")
         print(f"   Original shape: {train_data.shape}")
         print(f"   Processed shape: {processed_df.shape}")
 
@@ -112,7 +112,7 @@ def main():
     gc.collect()
 
     # 3. 타겟과 피처 분리
-    print("\n🎯 Separating features and target...")
+    print("\n Separating features and target...")
     if 'clicked' not in processed_df.columns:
         raise ValueError("Target column 'clicked' not found!")
 
@@ -124,7 +124,7 @@ def main():
     print(f"CTR: {y.mean():.4f}")
 
     # 4. 훈련/검증 분할
-    print("\n🔄 Splitting data...")
+    print("\n Splitting data...")
     test_size = DEEPFM_CONFIG.get("TEST_SIZE", 0.2)
     random_seed = DEEPFM_CONFIG.get("SEED", 42)
 
@@ -178,17 +178,17 @@ def main():
     total_time = time.time() - start_time
 
     print("\n" + "="*70)
-    print("🎉 DeepFM Data Preparation Complete!")
+    print(" DeepFM Data Preparation Complete!")
     print("="*70)
-    print(f"📊 Data Summary:")
+    print(f" Data Summary:")
     print(f"   Training samples: {len(y_train):,}")
     print(f"   Validation samples: {len(y_val):,}")
     print(f"   Total features: {metadata['feature_info']['total_features']}")
     print(f"   - Categorical: {metadata['feature_info']['categorical_count']}")
     print(f"   - Numerical: {metadata['feature_info']['numerical_count']}")
     print(f"⏱️  Processing time: {total_time:.1f}s")
-    print(f"📁 Saved to: {save_dir}/")
-    print("✅ Ready for DeepFM training!")
+    print(f" Saved to: {save_dir}/")
+    print(" Ready for DeepFM training!")
 
     return metadata
 
@@ -196,9 +196,9 @@ def main():
 if __name__ == "__main__":
     try:
         metadata = main()
-        print(f"\n🎯 Success! DeepFM data preparation completed.")
+        print(f"\n Success! DeepFM data preparation completed.")
         print(f"Next step: Run DeepFM training")
     except Exception as e:
-        print(f"\n❌ Error: {e}")
+        print(f"\n Error: {e}")
         import traceback
         traceback.print_exc()
