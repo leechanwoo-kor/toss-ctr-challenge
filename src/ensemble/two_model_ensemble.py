@@ -8,8 +8,8 @@ from pathlib import Path
 
 def main():
     # 파일 경로
-    xgboost_file = "submissions/xgboost/xgboost_kfold_1019_1310.csv" # v6
-    deepfm_file = "submissions/deepfm/deepfm_kfold_ensemble_20251019_125533.csv"  # v2.2 embedding
+    xgboost_file = "submissions/xgboost/xgboost_kfold_1012_1727.csv" # v6
+    deepfm_file = "submissions/deepfm/deepfm_kfold_ensemble_20251011_000856.csv"  # v2.2 embedding
 
     # 데이터 로드
     xgb_df = pd.read_csv(xgboost_file)
